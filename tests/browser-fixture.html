@@ -1,0 +1,53 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>X text copy regression fixture</title>
+<link rel="stylesheet" href="../content.css">
+<style>body{font:14px system-ui;background:#15202b;color:#8b98a5}main{width:360px;margin:20px auto}article{padding:12px;border:1px solid #38444d}article [data-testid="tweetText"]{color:#fff}article a{color:#1d9bf0}article [role="group"]{display:flex;align-items:center;justify-content:space-between;margin-top:8px;height:34px}article [role="group"]>button:not(.x-copy-post-button){border:0;background:none;color:inherit;padding:4px}video{width:120px;height:40px}</style>
+<body><main><h1>贴文与出处复制测试</h1>
+<article id="translated"><div data-testid="tweetText">XCopyBrowserTest Original #art<br>Second line 🐱<br>#猫 #2026</div><div><span id="translate">显示翻译</span></div><a href="https://x.com/test_fixture/status/987654321?=20&amp;t=discard"><time>翻译测试帖</time></a></article>
+<article id="photo"><div data-testid="tweetText">Photo post #photo</div><img alt="图片" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><a href="https://x.com/test_fixture/status/2?s=20"><time>图片帖</time></a></article>
+<article id="video"><div data-testid="tweetText">Video post #video</div><video></video><a href="https://x.com/test_fixture/status/3/video/1?s=20"><time>视频帖</time></a></article>
+<article id="gif"><div data-testid="tweetText">GIF post #gif</div><div data-testid="videoPlayer">GIF</div><a href="https://x.com/test_fixture/status/4?s=20"><time>GIF 帖</time></a></article>
+<article id="text"><div data-testid="tweetText">Text-only #words</div><a href="https://x.com/test_fixture/status/5?s=20"><time>无附件帖</time></a></article>
+<article id="empty"><video></video><a href="https://x.com/test_fixture/status/6?s=20"><time>无文字视频帖</time></a></article>
+<output id="result">等待复制</output></main>
+<script>
+window.testWrites=[];window.testErrors=[];window.downloadCalls=0;window.likeClicks=0;
+window.addEventListener('error',event=>testErrors.push(event.message));
+window.addEventListener('unhandledrejection',event=>testErrors.push(String(event.reason)));
+for(const article of document.querySelectorAll('article'))article.insertAdjacentHTML('beforeend','<div role="group"><button data-testid="reply">评论</button><button data-testid="retweet">转帖</button><button data-testid="like">喜欢</button><button data-testid="share">转发</button></div>');
+document.querySelector('#text [data-testid="like"]').dataset.testid='unlike';
+for(const button of document.querySelectorAll('[data-testid="like"], [data-testid="unlike"]'))button.addEventListener('click',()=>{
+  likeClicks++;
+  if(button.dataset.testid==='unlike')throw new Error('Must not undo an existing like');
+  if(testWrites.length===0)throw new Error('Must copy before liking');
+  setTimeout(()=>{button.dataset.testid='unlike';button.textContent='已喜欢';},60);
+});
+document.getElementById('translate').onclick=function(){
+  if(document.getElementById('translation'))return;
+  setTimeout(()=>{const block=document.createElement('div');block.id='translation';block.lang='zh';block.dir='auto';block.textContent='XCopyBrowserTest 中文译文 #艺术 ＃作品';this.parentElement.after(block);},120);
+};
+window.chrome={runtime:{id:'test-extension',getManifest(){return{};},sendMessage(){downloadCalls++;throw new Error('Images must not be downloaded');}}};
+const nativeMode=new URL(location.href).searchParams.has('native');
+const nativeWrite=nativeMode?navigator.clipboard.write.bind(navigator.clipboard):null;
+Object.defineProperty(navigator,'clipboard',{value:{async write(items){
+  if(nativeWrite)await nativeWrite(items);
+  const record={};for(const type of items[0].types)record[type]=await(await items[0].getType(type)).text();
+  testWrites.push(record);
+}}});
+window.runFixture=async function(){
+  const expected=[
+    'XCopyBrowserTest Original\nSecond line 🐱\n\nXCopyBrowserTest 中文译文\nhttps://x.com/test_fixture/status/987654321',
+    'Photo post\nhttps://x.com/test_fixture/status/2',
+    'Video post\nhttps://x.com/test_fixture/status/3',
+    'GIF post\nhttps://x.com/test_fixture/status/4',
+    'Text-only\nhttps://x.com/test_fixture/status/5',
+    'https://x.com/test_fixture/status/6'
+  ];
+  const buttons=[...document.querySelectorAll('.x-copy-post-button')];
+  window.buttonLayout=buttons.map(button=>{const rect=button.getBoundingClientRect(),share=button.parentElement.querySelector('[data-testid="share"]').getBoundingClientRect();return{width:rect.width,height:rect.height,last:button===button.parentElement.lastElementChild,sameRow:Math.abs((rect.top+rect.height/2)-(share.top+share.height/2))<1,rightOfShare:rect.left>=share.right};});
+  for(const button of buttons){button.click();while(button.disabled)await new Promise(resolve=>setTimeout(resolve,50));}
+  const passed=buttons.length===6&&testWrites.length===6&&downloadCalls===0&&likeClicks===5&&document.querySelectorAll('article [data-testid="unlike"]').length===6&&buttonLayout.every(item=>item.last&&item.sameRow&&item.rightOfShare&&item.width===30&&item.height===30)&&testWrites.every((record,index)=>Object.keys(record).join(',')==='text/plain,text/html'&&record['text/plain']===expected[index]&&!/<img|<strong>|#art|#艺术/.test(record['text/html']));
+  document.body.dataset.copyResult=passed?'pass':'fail';document.getElementById('result').textContent=document.body.dataset.copyResult;
+};
+</script>
+<script src="../core.js"></script><script src="../extractor.js"></script><script src="../clipboard.js"></script><script src="../content.js"></script>
+</body></html>

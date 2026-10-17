@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "X 图文复制与媒体下载",
+  "version": "1.0.0",
+  "description": "复制原文、译文与 orig 原图，清理标签并点赞；浏览器下载视频，扩展内转换和下载 GIF。",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "clipboardWrite",
+    "downloads",
+    "offscreen",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://pbs.twimg.com/*",
+    "https://video.twimg.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://pbs.twimg.com https://video.twimg.com"
+  },
+  "action": {
+    "default_title": "X 图文复制与媒体下载",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "media.js",
+        "media-bridge.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "media-main.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "core.js",
+        "extractor.js",
+        "clipboard.js",
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
