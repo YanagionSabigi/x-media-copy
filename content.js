@@ -313,7 +313,11 @@
     else images = await prepareImages((data.media || []).filter(item => item.type === 'photo'), sourcePostUrl, epoch);
     assertPage(epoch);
     if (!findPost(sourcePostUrl)) { const error = new Error('帖子已离开页面，请在原帖上重试'); error.stalePage = true; throw error; }
-    if (clipboard.inspectImages) images = await clipboard.inspectImages(images);
+    const merging = data.mergePhotos && images.length > 1;
+    if (merging) {
+      toast('正在读取原图并合成一张图片，请保持此页激活');
+      images = await globalThis.XCopyImageMerge.mergeImages(images, () => assertPage(epoch));
+    } else if (clipboard.inspectImages) images = await clipboard.inspectImages(images);
     assertPage(epoch);
     const imageCount = images.length;
     await clipboard.writeText({ ...data, images });
@@ -354,10 +358,10 @@
       unavailable: "已复制贴文和出处链接；未找到可用的点赞按钮",
       unconfirmed: "已复制贴文和出处链接；未能确认点赞，请检查页面"
     }[status];
-    toast(message + (imageCount ? `（含 ${imageCount} 张原图）` : ''), status === "unavailable" || status === "unconfirmed");
+    toast(message + (imageCount ? (merging ? '（含 1 张合成图）' : `（含 ${imageCount} 张原图）`) : ''), status === "unavailable" || status === "unconfirmed");
     await reportDownloads(message);
   }
-  async function handleCopy(article, button, originalOnly = false) {
+  async function handleCopy(article, button, originalOnly = false, mergePhotos = false) {
     if (copying || button.disabled) { toast("正在复制，请稍候"); return; }
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
@@ -382,7 +386,7 @@
         const currentMedia = getMedia(getArticle(), postUrl);
         const samePhotos = currentMedia.filter(item => item.type === 'photo').map(item => item.url).join('\n') === originalPhotos.map(item => item.url).join('\n');
         if (!samePhotos) discardImageRead(imageRead);
-        const data = { ...texts, postUrl, media: currentMedia, imageRead: samePhotos ? imageRead : null };
+        const data = { ...texts, postUrl, media: currentMedia, imageRead: samePhotos ? imageRead : null, mergePhotos };
         await copyAndLike(data, postUrl, epoch);
       });
     } catch (error) {
@@ -416,7 +420,7 @@
       button.dataset.xCopyUi = "true";
       button.className = "x-copy-post-button";
       button.setAttribute("aria-label", "复制贴文和出处链接，并自动点赞");
-      button.title = "复制图文并点赞，下载视频/GIF；Alt + 点击不复制译文";
+      button.title = "复制图文并点赞，下载视频/GIF；Shift + 点击将多张原图合成一张；Alt + 点击不复制译文";
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("viewBox", "0 0 24 24");
       svg.setAttribute("aria-hidden", "true");
@@ -427,7 +431,7 @@
       button.addEventListener('pointerenter', () => warmImages(article));
       button.addEventListener('focus', () => warmImages(article));
       button.addEventListener("click", event => {
-        event.preventDefault(); event.stopPropagation(); handleCopy(article, button, event.altKey);
+        event.preventDefault(); event.stopPropagation(); handleCopy(article, button, event.altKey, event.shiftKey);
       });
       group.append(button);
     }

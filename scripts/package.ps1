@@ -6,7 +6,7 @@ $archivePath = Join-Path $packageRoot $archiveName
 if (Test-Path -LiteralPath $archivePath) { throw "Release already exists: $archivePath" }
 $stagePath = Join-Path ([IO.Path]::GetTempPath()) ('xcopy-package-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stagePath | Out-Null
-$files = @('manifest.json','core.js','extractor.js','clipboard.js','content.js','content.css','media.js','media-main.js','media-hook.js','media-bridge.js','background.js','gif.js','offscreen.html','offscreen.js','popup.html','popup.js','README.md','LICENSE','NOTICE.md','PRIVACY.md','CHANGELOG.md','icons','vendor')
+$files = @('manifest.json','core.js','extractor.js','clipboard.js','image-merge.js','content.js','content.css','media.js','media-main.js','media-hook.js','media-bridge.js','background.js','gif.js','offscreen.html','offscreen.js','popup.html','popup.js','README.md','LICENSE','NOTICE.md','PRIVACY.md','CHANGELOG.md','icons','vendor')
 foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $packageRoot $file) -Destination $stagePath -Recurse }
 # Publish from an explicit allowlist; existing releases are preserved.
 Compress-Archive -Path (Join-Path $stagePath '*') -DestinationPath $archivePath -CompressionLevel Optimal
@@ -14,7 +14,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
 try {
   $names = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\','/') })
-  foreach ($required in @('manifest.json','background.js','offscreen.html','offscreen.js','LICENSE','NOTICE.md','PRIVACY.md','vendor/source-manifest.json','vendor/core/ffmpeg-core.wasm','vendor/licenses/GPL-2.0.txt','vendor/licenses/FFMPEG-WASM-MIT.txt')) {
+  foreach ($required in @('manifest.json','background.js','image-merge.js','offscreen.html','offscreen.js','LICENSE','NOTICE.md','PRIVACY.md','vendor/source-manifest.json','vendor/core/ffmpeg-core.wasm','vendor/licenses/GPL-2.0.txt','vendor/licenses/FFMPEG-WASM-MIT.txt')) {
     if ($names -notcontains $required) { throw "Missing release file: $required" }
   }
   if ($names | Where-Object { $_ -match '(^|/)(node_modules|tests|test-results)/' }) { throw 'Release contains development files' }

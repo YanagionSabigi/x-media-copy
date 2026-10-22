@@ -33,6 +33,7 @@ function fixture(html, options = {}) {
     });
   }
   Object.assign(dom.window, { XCopyCore: core, XCopyExtractor: extractor, XCopyMedia: options.media ? require('../media.js') : undefined,
+    XCopyImageMerge: { mergeImages: options.mergeImages || (async images => images) },
     chrome: { runtime: { id: 'test-extension', getManifest: () => { if (options.invalidated?.()) throw new Error('Extension context invalidated.'); return {}; }, connect: ({ name }) => { const listeners = []; const port = { name, disconnected: false, onDisconnect: { addListener(fn) { listeners.push(fn); } }, disconnect() { port.disconnected = true; listeners.forEach(fn => fn()); } }; ports.push(port); return port; }, sendMessage: async request => ({ ok: true, data: await options.message?.(request) }), onMessage: { addListener() {}, removeListener() {} } } },
     XCopyClipboard: { inspectImages: options.inspectImages, writeText: async data => { await options.beforeWrite?.(data); writes.push(core.buildClipboardPayload(data)); }, writeImage: async data => { await options.beforeWrite?.(data); writes.push({ image: data }); } } });
   dom.window.eval(fs.readFileSync(path.join(__dirname, "../content.js"), "utf8"));
@@ -368,7 +369,7 @@ test('clipboard focus failure explains how to retry and does not like or downloa
   } finally { dom.window.close(); }
 });
 
-test("Shift click behaves like normal copy without an editing dialog", async () => {
+test("Shift on a text-only post copies normally without an editing dialog", async () => {
   const { dom, document, likes, writes } = fixture(`<article id="main">${link(1)}${bar}</article><article id="other">${link(2)}${bar}</article>`);
   try {
     const copy = document.querySelector('#main .x-copy-post-button');
@@ -448,6 +449,61 @@ test('Alt copies original with images and clean source without translation or pr
     assert.doesNotMatch(writes[0].html, /中文译文/);
     assert.equal(likes.length, 1);
   } finally { dom.window.close(); }
+});
+
+test('Shift copies text and translation with only the merged photo, then likes', async () => {
+  const requests = [];
+  const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {
+    media: true,
+    mergeImages: async images => {
+      assert.equal(images.length, 2);
+      assert.equal(setup.likes.length, 0);
+      return [{ dataUrl: 'data:image/png;base64,TUVSR0VE', width: 2736, height: 2048 }];
+    },
+    message: request => { requests.push(request); return request.urls ? imageResult(request) : true; }
+  });
+  try {
+    setup.document.querySelector('.x-copy-post-button').dispatchEvent(new setup.dom.window.MouseEvent('click', { shiftKey: true }));
+    await tick(30);
+    assert.equal(setup.writes.length, 1);
+    assert.equal((setup.writes[0].html.match(/<img /g) || []).length, 1);
+    assert.match(setup.writes[0].html, /TUVSR0VE/);
+    assert.equal(setup.writes[0].plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
+    assert.equal(setup.likes.length, 1);
+    assert.equal(requests.some(request => request.type === 'downloadMedia'), false);
+  } finally { setup.dom.window.close(); }
+});
+
+test('Shift merge failure leaves clipboard and like untouched and button can be retried', async () => {
+  const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg">'), {
+    media: true, mergeImages: async () => { throw new Error('图片无法排成矩形'); },
+    message: request => request.urls ? imageResult(request) : true
+  });
+  try {
+    const button = setup.document.querySelector('.x-copy-post-button');
+    button.dispatchEvent(new setup.dom.window.MouseEvent('click', { shiftKey: true })); await tick(30);
+    assert.equal(setup.writes.length, 0); assert.equal(setup.likes.length, 0);
+    assert.equal(button.disabled, false);
+    assert.match(setup.document.querySelector('.x-copy-toast-error').textContent, /矩形/);
+  } finally { setup.dom.window.close(); }
+});
+
+test('Alt+Shift merges while omitting translation; ordinary and Alt clicks retain separate photos', async () => {
+  const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {
+    media: true, mergeImages: async () => [{ dataUrl: 'data:image/png;base64,TUVSR0VE' }],
+    message: request => request.urls ? imageResult(request) : true
+  });
+  try {
+    const button = setup.document.querySelector('.x-copy-post-button');
+    for (const modifiers of [{ altKey: true, shiftKey: true }, {}, { altKey: true }]) {
+      button.dispatchEvent(new setup.dom.window.MouseEvent('click', modifiers)); await tick(30);
+    }
+    assert.deepEqual(setup.writes.map(write => (write.html.match(/<img /g) || []).length), [1, 2, 2]);
+    assert.equal(setup.writes[0].plain, 'Source\nhttps://x.com/a/status/1');
+    assert.equal(setup.writes[1].plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
+    assert.equal(setup.writes[2].plain, 'Source\nhttps://x.com/a/status/1');
+    assert.equal(setup.likes.length, 1);
+  } finally { setup.dom.window.close(); }
 });
 
 test('video download starts only after clipboard success and uses source post id', async () => {

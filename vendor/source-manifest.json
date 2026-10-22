@@ -1,6 +1,6 @@
 {
   "project": "YanagionSabigi/x-media-copy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "corePackage": "@ffmpeg/core@0.12.10",
   "wrapperPackage": "@ffmpeg/ffmpeg@0.12.15",
   "upstreamCommit": "71aa99d37c02a7b4c435275ca9ef50e612f6efa1",

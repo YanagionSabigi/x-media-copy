@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "X 图文复制与媒体下载",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "version_name": "1.0.1",
   "description": "复制原文、译文与 orig 原图，清理标签并点赞；浏览器下载视频，扩展内转换和下载 GIF。",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -56,6 +57,7 @@
         "core.js",
         "extractor.js",
         "clipboard.js",
+        "image-merge.js",
         "content.js"
       ],
       "css": [

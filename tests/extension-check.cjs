@@ -144,8 +144,12 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       if (originalOnly.text.replace(/\r\n?/g,'\n') !== 'Original\nhttps://x.com/qa/status/101' || originalOnly.images!==3 || !originalOnly.bytesUnchanged || !originalOnly.noDialog) throw new Error('Alt original-only copy failed: '+JSON.stringify(originalOnly));
       await evaluateOn(fixture, 'document.querySelector("#photo .x-copy-post-button").dispatchEvent(new MouseEvent("click",{shiftKey:true,bubbles:true}))');
       await waitFor(() => evaluateOn(fixture, '!document.querySelector("#photo .x-copy-post-button").disabled'));
-      const shiftText = await evaluateOn(fixture, 'navigator.clipboard.readText()');
-      if (shiftText.replace(/\r\n?/g,'\n') !== 'Original\n\n中文译文\nhttps://x.com/qa/status/101') throw new Error('Shift should copy normally');
+      const mergedCopy = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();const text=await(await item.getType('text/plain')).text(),html=await(await item.getType('text/html')).text();const images=[...new DOMParser().parseFromString(html,'text/html').querySelectorAll('img')];const bmp=await createImageBitmap(await(await fetch(images[0].src)).blob());const result={text,images:images.length,width:bmp.width,height:bmp.height,png:images[0].src.startsWith('data:image/png;base64,'),noDialog:!document.querySelector('[role=dialog]')};bmp.close();return result;})()`);
+      if (mergedCopy.text.replace(/\r\n?/g,'\n') !== 'Original\n\n中文译文\nhttps://x.com/qa/status/101' || mergedCopy.images !== 1 || mergedCopy.width * mergedCopy.height !== 3 * 2048 * 1024 || !mergedCopy.png || !mergedCopy.noDialog) throw new Error('Shift merged clipboard failed: ' + JSON.stringify(mergedCopy));
+      await evaluateOn(fixture, 'document.querySelector("#photo .x-copy-post-button").dispatchEvent(new MouseEvent("click",{shiftKey:true,altKey:true,bubbles:true}))');
+      await waitFor(() => evaluateOn(fixture, '!document.querySelector("#photo .x-copy-post-button").disabled'));
+      const mergedOriginal = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();return{text:await(await item.getType('text/plain')).text(),images:new DOMParser().parseFromString(await(await item.getType('text/html')).text(),'text/html').querySelectorAll('img').length};})()`);
+      if (mergedOriginal.text.replace(/\r\n?/g,'\n') !== 'Original\nhttps://x.com/qa/status/101' || mergedOriginal.images !== 1) throw new Error('Alt+Shift merged copy failed: ' + JSON.stringify(mergedOriginal));
       await evaluateOn(fixture, 'document.querySelector("#animation .x-copy-post-button").click()');
       await waitFor(() => evaluateOn(fixture, '!!document.querySelector("#animation [data-like-clicked=true]")'));
       // Once clipboard succeeds, switching to chat must not discard the user's
@@ -159,7 +163,7 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       const downloaded = await evaluateOn(swTab, `chrome.downloads.search({id:${jobs[0].downloadId}})`);
       const saved = await fs.readFile(downloaded[0].filename);
       if (!saved.subarray(0,6).toString().startsWith('GIF8') || saved.at(-1)!==0x3b) throw new Error('Downloaded GIF invalid');
-      const evidence = { capturedIds, focusFailure, clipboard, originalOnly, shiftText, jobs, download: { bytes: saved.length, filename: downloaded[0].filename }, originalRequests: seen.filter(url => url.includes('name=orig')) };
+      const evidence = { capturedIds, focusFailure, clipboard, originalOnly, mergedCopy, mergedOriginal, jobs, download: { bytes: saved.length, filename: downloaded[0].filename }, originalRequests: seen.filter(url => url.includes('name=orig')) };
       console.log(JSON.stringify({ e2e: evidence })); await fs.writeFile(path.join(directory, 'evidence.json'), JSON.stringify(evidence,null,2));
       const screenshot = await fixture.call('Page.captureScreenshot', { format: 'png' }); await fs.writeFile(path.join(directory, 'fixture.png'), Buffer.from(screenshot.data,'base64'));
     }

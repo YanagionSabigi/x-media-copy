@@ -1,11 +1,12 @@
 {
   "name": "x-image-text-translation-copy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
     "vendor": "node scripts/vendor.cjs",
     "test:extension": "node tests/extension-check.cjs --e2e",
+    "test:merge": "node tests/merge-check.cjs",
     "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1"
   },
   "devDependencies": {
