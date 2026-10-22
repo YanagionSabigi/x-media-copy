@@ -320,7 +320,7 @@
     } else if (clipboard.inspectImages) images = await clipboard.inspectImages(images);
     assertPage(epoch);
     const imageCount = images.length;
-    await clipboard.writeText({ ...data, images });
+    await clipboard.writeText({ ...data, images, mergedImage: merging ? images[0] : null });
     // The system clipboard owns its data now; do not pin a large temporary
     // copy while waiting for like confirmation or optional media resolution.
     images = null;

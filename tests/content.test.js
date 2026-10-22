@@ -455,6 +455,10 @@ test('Shift copies text and translation with only the merged photo, then likes',
   const requests = [];
   const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {
     media: true,
+    beforeWrite: data => {
+      assert.equal(data.mergedImage?.dataUrl, 'data:image/png;base64,TUVSR0VE');
+      assert.equal(data.mergedImage, data.images[0]);
+    },
     mergeImages: async images => {
       assert.equal(images.length, 2);
       assert.equal(setup.likes.length, 0);

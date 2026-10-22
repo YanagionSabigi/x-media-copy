@@ -144,12 +144,12 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       if (originalOnly.text.replace(/\r\n?/g,'\n') !== 'Original\nhttps://x.com/qa/status/101' || originalOnly.images!==3 || !originalOnly.bytesUnchanged || !originalOnly.noDialog) throw new Error('Alt original-only copy failed: '+JSON.stringify(originalOnly));
       await evaluateOn(fixture, 'document.querySelector("#photo .x-copy-post-button").dispatchEvent(new MouseEvent("click",{shiftKey:true,bubbles:true}))');
       await waitFor(() => evaluateOn(fixture, '!document.querySelector("#photo .x-copy-post-button").disabled'));
-      const mergedCopy = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();const text=await(await item.getType('text/plain')).text(),html=await(await item.getType('text/html')).text();const images=[...new DOMParser().parseFromString(html,'text/html').querySelectorAll('img')];const bmp=await createImageBitmap(await(await fetch(images[0].src)).blob());const result={text,images:images.length,width:bmp.width,height:bmp.height,png:images[0].src.startsWith('data:image/png;base64,'),noDialog:!document.querySelector('[role=dialog]')};bmp.close();return result;})()`);
-      if (mergedCopy.text.replace(/\r\n?/g,'\n') !== 'Original\n\n中文译文\nhttps://x.com/qa/status/101' || mergedCopy.images !== 1 || mergedCopy.width * mergedCopy.height !== 3 * 2048 * 1024 || !mergedCopy.png || !mergedCopy.noDialog) throw new Error('Shift merged clipboard failed: ' + JSON.stringify(mergedCopy));
+      const mergedCopy = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();const text=await(await item.getType('text/plain')).text(),html=await(await item.getType('text/html')).text();const images=[...new DOMParser().parseFromString(html,'text/html').querySelectorAll('img')];const bmp=await createImageBitmap(await(await fetch(images[0].src)).blob());const result={text,types:item.types,images:images.length,width:bmp.width,height:bmp.height,png:images[0].src.startsWith('data:image/png;base64,'),noDialog:!document.querySelector('[role=dialog]')};bmp.close();return result;})()`);
+      if (mergedCopy.text.replace(/\r\n?/g,'\n') !== 'Original\n\n中文译文\nhttps://x.com/qa/status/101' || mergedCopy.images !== 1 || mergedCopy.width * mergedCopy.height !== 3 * 2048 * 1024 || mergedCopy.types.includes('image/png') || !mergedCopy.png || !mergedCopy.noDialog) throw new Error('Shift merged clipboard failed: ' + JSON.stringify(mergedCopy));
       await evaluateOn(fixture, 'document.querySelector("#photo .x-copy-post-button").dispatchEvent(new MouseEvent("click",{shiftKey:true,altKey:true,bubbles:true}))');
       await waitFor(() => evaluateOn(fixture, '!document.querySelector("#photo .x-copy-post-button").disabled'));
-      const mergedOriginal = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();return{text:await(await item.getType('text/plain')).text(),images:new DOMParser().parseFromString(await(await item.getType('text/html')).text(),'text/html').querySelectorAll('img').length};})()`);
-      if (mergedOriginal.text.replace(/\r\n?/g,'\n') !== 'Original\nhttps://x.com/qa/status/101' || mergedOriginal.images !== 1) throw new Error('Alt+Shift merged copy failed: ' + JSON.stringify(mergedOriginal));
+      const mergedOriginal = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();return{text:await(await item.getType('text/plain')).text(),nativePng:item.types.includes('image/png'),images:new DOMParser().parseFromString(await(await item.getType('text/html')).text(),'text/html').querySelectorAll('img').length};})()`);
+      if (mergedOriginal.text.replace(/\r\n?/g,'\n') !== 'Original\nhttps://x.com/qa/status/101' || mergedOriginal.images !== 1 || mergedOriginal.nativePng) throw new Error('Alt+Shift merged copy failed: ' + JSON.stringify(mergedOriginal));
       await evaluateOn(fixture, 'document.querySelector("#animation .x-copy-post-button").click()');
       await waitFor(() => evaluateOn(fixture, '!!document.querySelector("#animation [data-like-clicked=true]")'));
       // Once clipboard succeeds, switching to chat must not discard the user's
@@ -166,6 +166,11 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       const evidence = { capturedIds, focusFailure, clipboard, originalOnly, mergedCopy, mergedOriginal, jobs, download: { bytes: saved.length, filename: downloaded[0].filename }, originalRequests: seen.filter(url => url.includes('name=orig')) };
       console.log(JSON.stringify({ e2e: evidence })); await fs.writeFile(path.join(directory, 'evidence.json'), JSON.stringify(evidence,null,2));
       const screenshot = await fixture.call('Page.captureScreenshot', { format: 'png' }); await fs.writeFile(path.join(directory, 'fixture.png'), Buffer.from(screenshot.data,'base64'));
+      const popupTarget = await control.call('Target.createTarget', { url: `chrome-extension://${extensionId}/popup.html` });
+      const popup = await connect(`ws://${new URL(debugOrigin).host}/devtools/page/${popupTarget.targetId}`);
+      await waitFor(() => evaluateOn(popup, 'document.getElementById("jobs")?.textContent.includes("GIF")'));
+      const popupShot = await popup.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+      await fs.writeFile(path.join(directory, 'popup.png'), Buffer.from(popupShot.data,'base64'));
     }
   }
   await control.call('Browser.close'); page.socket.close(); control.socket.close();
