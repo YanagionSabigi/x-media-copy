@@ -33,7 +33,7 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
   };
   const status = await evaluate(`(async()=>{ const response=await chrome.runtime.sendMessage({type:'getJobs'}); return {id:chrome.runtime.id, background:response, version:chrome.runtime.getManifest().version}; })()`);
   console.log(JSON.stringify({ status, extensionId }));
-  if (process.argv.includes('--convert') || process.argv.includes('--e2e')) {
+  if (process.argv.includes('--convert') || process.argv.includes('--e2e') || process.argv.includes('--stress') || process.argv.includes('--volume')) {
     const result = await evaluate(`(async()=>{
       const {FFmpeg}=await import('./vendor/ffmpeg/index.js');
       const encoder=new FFmpeg();
@@ -51,6 +51,124 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
     const { sourceBase64, photoBase64, ...metadata } = result;
     console.log(JSON.stringify({ conversion: metadata }));
     if (result.frames < 2 || result.width !== 96 || result.height !== 64 || !result.header.startsWith('GIF8')) throw new Error('Invalid animated GIF output');
+    const cadence = await evaluate(`(async()=>{
+      const {FFmpeg}=await import('./vendor/ffmpeg/index.js');
+      const {convertGif}=await import('./offscreen.js');
+      const results=[];
+      for(const rate of ['24','30000/1001','30','60']) {
+        const encoder=new FFmpeg();
+        try {
+          await encoder.load({classWorkerURL:chrome.runtime.getURL('vendor/ffmpeg/worker.js'),coreURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.js'),wasmURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.wasm')});
+          const code=await encoder.exec(['-f','lavfi','-i','testsrc=size=96x64:rate='+rate+':duration=1','-f','lavfi','-i','sine=frequency=440:duration=1','-c:v','mpeg4','-c:a','aac','sample.mp4']);
+          if(code)throw new Error('Audible fixture encode failed');
+          await encoder.ffprobe(['-v','error','-show_streams','-of','json','-o','source.json','sample.mp4']);
+          const source=JSON.parse(await encoder.readFile('source.json','utf8'));
+          if(!source.streams.some(stream=>stream.codec_type==='audio'))throw new Error('Fixture missing audio');
+          const input=source.streams.find(stream=>stream.codec_type==='video');
+          const converted=await convertGif({jobId:'qa-rate-'+rate,testBytes:await encoder.readFile('sample.mp4')}).catch(error=>{throw new Error('Conversion at '+rate+' fps: '+error.message+'; completed '+JSON.stringify(results));});
+          await encoder.writeFile('result.gif',new Uint8Array(await(await fetch(converted.url)).arrayBuffer()));
+          await encoder.ffprobe(['-v','error','-min_delay','0','-show_streams','-of','json','-o','result.json','result.gif']);
+          const output=JSON.parse(await encoder.readFile('result.json','utf8'));
+          if(output.streams.length!==1||output.streams[0].codec_type!=='video')throw new Error('GIF contains unexpected stream');
+          if(converted.frames!==Number(input.nb_frames))throw new Error('GIF frame loss at '+rate+': '+converted.frames+'/'+input.nb_frames);
+          if(Math.abs(converted.duration-Number(input.duration))>0.03)throw new Error('GIF playback speed changed at '+rate);
+          if(converted.width!==96||converted.height!==64)throw new Error('GIF dimensions changed');
+          const sampled=await convertGif({jobId:'qa-sampled-'+rate,gifFps:10,testBytes:await encoder.readFile('sample.mp4')});
+          if(sampled.frames!==10||Math.abs(sampled.duration-Number(input.duration))>0.08)throw new Error('10 fps sampling changed duration or frame count at '+rate+': '+JSON.stringify(sampled));
+          if(sampled.width!==96||sampled.height!==64)throw new Error('Sampling changed dimensions');
+          results.push({rate,sourceFrames:Number(input.nb_frames),frames:converted.frames,sourceDuration:Number(input.duration),duration:converted.duration,sampledFrames:sampled.frames,sampledDuration:sampled.duration,audio:false});
+        } finally {encoder.terminate();}
+      }
+      return results;
+    })()`);
+    console.log(JSON.stringify({ cadence }));
+    const sizes = await evaluate(`(async()=>{
+      const {FFmpeg}=await import('./vendor/ffmpeg/index.js');
+      const {convertGif}=await import('./offscreen.js');
+      const results=[];
+      for(const [width,height,expectedWidth,expectedHeight] of [[1280,720,800,450],[960,1280,800,1067],[640,360,640,360]]) {
+        const encoder=new FFmpeg();
+        try {
+          await encoder.load({classWorkerURL:chrome.runtime.getURL('vendor/ffmpeg/worker.js'),coreURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.js'),wasmURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.wasm')});
+          const code=await encoder.exec(['-f','lavfi','-i','testsrc2=size='+width+'x'+height+':rate=30:duration=1','-c:v','mpeg4','sample.mp4']);
+          if(code)throw new Error('Size fixture encode failed');
+          const sampled=await convertGif({jobId:'qa-size-'+width,gifFps:10,testBytes:await encoder.readFile('sample.mp4')});
+          await encoder.writeFile('resized.gif',new Uint8Array(await(await fetch(sampled.url)).arrayBuffer()));
+          await encoder.ffprobe(['-v','error','-min_delay','0','-show_streams','-of','json','-o','resized.json','resized.gif']);
+          const actual=JSON.parse(await encoder.readFile('resized.json','utf8')).streams[0];
+          if(actual.width!==expectedWidth||actual.height!==expectedHeight||sampled.width!==actual.width||sampled.height!==actual.height)throw new Error('Sample size/report mismatch: '+JSON.stringify({width,height,sampled,actual}));
+          if(sampled.frames!==10||Math.abs(sampled.duration-1)>0.08)throw new Error('Resizing changed frame count or duration');
+          const source=await convertGif({jobId:'qa-original-size-'+width,gifFps:'source',testBytes:await encoder.readFile('sample.mp4')});
+          if(source.width!==width||source.height!==height||source.frames!==30)throw new Error('Source mode resized or dropped frames');
+          results.push({input:[width,height],sampled:[sampled.width,sampled.height],source:[source.width,source.height],frames:sampled.frames});
+        } finally {encoder.terminate();}
+      }
+      return results;
+    })()`);
+    console.log(JSON.stringify({ sizes }));
+    if (process.argv.includes('--volume')) {
+      console.log('Measuring 10-second 1080p60 input at 10 fps and legacy 15 fps, both max-width 800');
+      const volume = await evaluate(`(async()=>{
+        const {FFmpeg}=await import('./vendor/ffmpeg/index.js');
+        const {convertGif}=await import('./offscreen.js');
+        const encoder=new FFmpeg();let bytes;
+        try {
+          await encoder.load({classWorkerURL:chrome.runtime.getURL('vendor/ffmpeg/worker.js'),coreURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.js'),wasmURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.wasm')});
+          if(await encoder.exec(['-f','lavfi','-i','testsrc2=size=1920x1080:rate=60:duration=10','-c:v','mpeg4','-q:v','8','-an','sample.mp4'],60000))throw new Error('Volume fixture encode failed');
+          bytes=await encoder.readFile('sample.mp4');
+        } finally {encoder.terminate();}
+        const results=[];
+        for(const fps of [10,15]) {
+          const started=performance.now();
+          const result=await convertGif({jobId:'qa-volume-'+fps,gifFps:fps,testBytes:bytes.slice()});
+          if(result.frames!==fps*10||Math.abs(result.duration-10)>0.03||result.width!==800||result.height!==450)throw new Error('Volume conversion changed frames, duration or dimensions: '+JSON.stringify(result));
+          results.push({fps,width:result.width,height:result.height,frames:result.frames,duration:result.duration,bytes:result.size,seconds:(performance.now()-started)/1000});
+          URL.revokeObjectURL(result.url);
+        }
+        if(results[0].bytes>=results[1].bytes)throw new Error('10 fps did not reduce this fixture compared with 15 fps');
+        return {fixture:'10 second 1920x1080 60 fps testsrc2',inputBytes:bytes.length,results};
+      })()`);
+      console.log(JSON.stringify({ volume }));
+      const volumeDir = path.join(root, 'test-results', 'gif-sampling'); await fs.mkdir(volumeDir, { recursive: true });
+      await fs.writeFile(path.join(volumeDir, 'volume-10fps.json'), JSON.stringify(volume, null, 2));
+    }
+    if (process.argv.includes('--stress')) {
+      await page.call('Runtime.addBinding', { name: 'stressProgress' });
+      page.socket.addEventListener('message', event => {
+        const message = JSON.parse(event.data);
+        if (message.method === 'Runtime.bindingCalled' && message.params.name === 'stressProgress') console.log(message.params.payload);
+      });
+      const stress = await evaluate(`(async()=>{
+        const {FFmpeg}=await import('./vendor/ffmpeg/index.js');
+        const {convertGif}=await import('./offscreen.js');
+        const encoder=new FFmpeg();
+        let bytes;
+        const started=performance.now();
+        stressProgress('Encoding 20 second 1920x1080 60 fps fixture');
+        try {
+          await encoder.load({classWorkerURL:chrome.runtime.getURL('vendor/ffmpeg/worker.js'),coreURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.js'),wasmURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.wasm')});
+          const code=await encoder.exec(['-f','lavfi','-i','testsrc2=size=1920x1080:rate=60:duration=20','-c:v','mpeg4','-q:v','8','-an','sample.mp4'],180000);
+          if(code)throw new Error('Stress fixture encoding failed');
+          bytes=await encoder.readFile('sample.mp4');
+        } finally {encoder.terminate();}
+        stressProgress('Converting full 1200 frames at source cadence; input bytes '+bytes.length);
+        const conversionStarted=performance.now();
+        // FFmpeg transfers and detaches writeFile buffers; keep independent
+        // input bytes for the second conversion and evidence below.
+        const source=await convertGif({jobId:'qa-stress-source',testBytes:bytes.slice(),gifFps:'source'});
+        const sourceSeconds=(performance.now()-conversionStarted)/1000;
+        if(source.frames!==1200||Math.abs(source.duration-20)>0.03||source.width!==1920||source.height!==1080)throw new Error('Stress output changed frame count, duration or dimensions: '+JSON.stringify(source));
+        stressProgress('Source conversion complete in '+sourceSeconds.toFixed(1)+' seconds; output bytes '+source.size);
+        URL.revokeObjectURL(source.url);
+        const samplingStarted=performance.now();
+        const sampled=await convertGif({jobId:'qa-stress-10',testBytes:bytes.slice(),gifFps:10});
+        if(sampled.frames!==200||Math.abs(sampled.duration-20)>0.08||sampled.width!==800||sampled.height!==450)throw new Error('Stress sampled output changed duration or dimensions: '+JSON.stringify(sampled));
+        return {inputBytes:bytes.length,source:{frames:source.frames,duration:source.duration,bytes:source.size,seconds:sourceSeconds},sampled:{frames:sampled.frames,duration:sampled.duration,bytes:sampled.size,seconds:(performance.now()-samplingStarted)/1000},totalSeconds:(performance.now()-started)/1000};
+      })()`);
+      console.log(JSON.stringify({ stress }));
+      const evidenceDir = path.join(root, 'test-results', 'gif-sampling'); await fs.mkdir(evidenceDir, { recursive: true });
+      await fs.writeFile(path.join(evidenceDir, 'stress.json'), JSON.stringify(stress, null, 2));
+    }
     if (process.argv.includes('--e2e')) {
       const directory = path.join(root, 'test-results', 'extension'); await fs.mkdir(directory, { recursive: true });
       await control.call('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: directory });
@@ -64,6 +182,10 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
         if (out.exceptionDetails) throw new Error(JSON.stringify(out.exceptionDetails));
         return out.result.value;
       };
+      // The visible converter QA tab must stop listening before the real
+      // offscreen document receives runtime conversion messages.
+      await page.call('Page.navigate', { url: `chrome-extension://${extensionId}/popup.html` });
+      await waitFor(() => evaluate('location.pathname === "/popup.html" && !!document.getElementById("jobs")'));
       await evaluateOn(swTab, `chrome.offscreen.createDocument({url:'offscreen.html',reasons:['WORKERS','BLOBS'],justification:'Isolated extension conversion verification'})`);
       const offTarget = await waitFor(async () => (await control.call('Target.getTargets')).targetInfos.find(t => t.url === `chrome-extension://${extensionId}/offscreen.html` && t.targetId !== targetId));
       const off = await connect(`ws://${new URL(debugOrigin).host}/devtools/page/${offTarget.targetId}`);
@@ -144,12 +266,12 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       if (originalOnly.text.replace(/\r\n?/g,'\n') !== 'Original\nhttps://x.com/qa/status/101' || originalOnly.images!==3 || !originalOnly.bytesUnchanged || !originalOnly.noDialog) throw new Error('Alt original-only copy failed: '+JSON.stringify(originalOnly));
       await evaluateOn(fixture, 'document.querySelector("#photo .x-copy-post-button").dispatchEvent(new MouseEvent("click",{shiftKey:true,bubbles:true}))');
       await waitFor(() => evaluateOn(fixture, '!document.querySelector("#photo .x-copy-post-button").disabled'));
-      const mergedCopy = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();const text=await(await item.getType('text/plain')).text(),html=await(await item.getType('text/html')).text();const images=[...new DOMParser().parseFromString(html,'text/html').querySelectorAll('img')];const bmp=await createImageBitmap(await(await fetch(images[0].src)).blob());const result={text,images:images.length,width:bmp.width,height:bmp.height,png:images[0].src.startsWith('data:image/png;base64,'),noDialog:!document.querySelector('[role=dialog]')};bmp.close();return result;})()`);
-      if (mergedCopy.text.replace(/\r\n?/g,'\n') !== 'Original\n\n中文译文\nhttps://x.com/qa/status/101' || mergedCopy.images !== 1 || mergedCopy.width * mergedCopy.height !== 3 * 2048 * 1024 || !mergedCopy.png || !mergedCopy.noDialog) throw new Error('Shift merged clipboard failed: ' + JSON.stringify(mergedCopy));
+      const mergedCopy = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();const text=await(await item.getType('text/plain')).text(),html=await(await item.getType('text/html')).text();const images=[...new DOMParser().parseFromString(html,'text/html').querySelectorAll('img')];const bmp=await createImageBitmap(await(await fetch(images[0].src)).blob());const result={text,types:item.types,images:images.length,width:bmp.width,height:bmp.height,png:images[0].src.startsWith('data:image/png;base64,'),noDialog:!document.querySelector('[role=dialog]')};bmp.close();return result;})()`);
+      if (mergedCopy.text.replace(/\r\n?/g,'\n') !== 'Original\n\n中文译文\nhttps://x.com/qa/status/101' || mergedCopy.images !== 1 || mergedCopy.width * mergedCopy.height !== 3 * 2048 * 1024 || mergedCopy.types.includes('image/png') || !mergedCopy.png || !mergedCopy.noDialog) throw new Error('Shift merged clipboard failed: ' + JSON.stringify(mergedCopy));
       await evaluateOn(fixture, 'document.querySelector("#photo .x-copy-post-button").dispatchEvent(new MouseEvent("click",{shiftKey:true,altKey:true,bubbles:true}))');
       await waitFor(() => evaluateOn(fixture, '!document.querySelector("#photo .x-copy-post-button").disabled'));
-      const mergedOriginal = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();return{text:await(await item.getType('text/plain')).text(),images:new DOMParser().parseFromString(await(await item.getType('text/html')).text(),'text/html').querySelectorAll('img').length};})()`);
-      if (mergedOriginal.text.replace(/\r\n?/g,'\n') !== 'Original\nhttps://x.com/qa/status/101' || mergedOriginal.images !== 1) throw new Error('Alt+Shift merged copy failed: ' + JSON.stringify(mergedOriginal));
+      const mergedOriginal = await evaluateOn(fixture, `(async()=>{const [item]=await navigator.clipboard.read();return{text:await(await item.getType('text/plain')).text(),nativePng:item.types.includes('image/png'),images:new DOMParser().parseFromString(await(await item.getType('text/html')).text(),'text/html').querySelectorAll('img').length};})()`);
+      if (mergedOriginal.text.replace(/\r\n?/g,'\n') !== 'Original\nhttps://x.com/qa/status/101' || mergedOriginal.images !== 1 || mergedOriginal.nativePng) throw new Error('Alt+Shift merged copy failed: ' + JSON.stringify(mergedOriginal));
       await evaluateOn(fixture, 'document.querySelector("#animation .x-copy-post-button").click()');
       await waitFor(() => evaluateOn(fixture, '!!document.querySelector("#animation [data-like-clicked=true]")'));
       // Once clipboard succeeds, switching to chat must not discard the user's
@@ -163,11 +285,63 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       const downloaded = await evaluateOn(swTab, `chrome.downloads.search({id:${jobs[0].downloadId}})`);
       const saved = await fs.readFile(downloaded[0].filename);
       if (!saved.subarray(0,6).toString().startsWith('GIF8') || saved.at(-1)!==0x3b) throw new Error('Downloaded GIF invalid');
-      const evidence = { capturedIds, focusFailure, clipboard, originalOnly, mergedCopy, mergedOriginal, jobs, download: { bytes: saved.length, filename: downloaded[0].filename }, originalRequests: seen.filter(url => url.includes('name=orig')) };
+      await control.call('Target.activateTarget', { targetId: created.targetId });
+      await waitFor(() => evaluateOn(fixture, '!document.hidden'));
+      await evaluateOn(fixture, `(()=>{const article=document.createElement('article');article.id='video';article.innerHTML='<div data-testid="tweetText">Ordinary video #clip</div><div data-testid="tweetText">视频译文 #视频</div><video src="https://video.twimg.com/ext_tw_video/303/a.mp4"></video><a href="/qa/status/303"><time>now</time></a>'+${JSON.stringify(bar)};article.querySelector('[data-testid=like]').onclick=event=>{event.currentTarget.dataset.testid='unlike'};document.body.append(article);})()`);
+      await waitFor(() => evaluateOn(fixture, '!!document.querySelector("#video .x-copy-gif-button")'));
+      await evaluateOn(fixture, 'document.querySelector("#video .x-copy-gif-button").click()');
+      const videoGif = await waitFor(async () => {
+        const response = await evaluate('chrome.runtime.sendMessage({type:"getJobs"})');
+        const selected = response.data.filter(job => job.postId === '303');
+        if (selected.some(job => job.status === 'failed')) throw new Error('Video GIF download failed: '+JSON.stringify(selected));
+        if (selected.length > 1 || selected.some(job => job.format !== 'gif' || job.gifFps !== 10)) throw new Error('GIF action started wrong sampling mode or extra downloads');
+        return selected[0]?.status === 'complete' ? selected[0] : null;
+      }, 30000);
+      if (await evaluateOn(fixture, '!!document.querySelector("#video [data-testid=unlike]")')) throw new Error('GIF action liked the post');
+      const readGifClipboard = `(async()=>{const [item]=await navigator.clipboard.read();const text=await(await item.getType('text/plain')).text(),html=await(await item.getType('text/html')).text();const doc=new DOMParser().parseFromString(html,'text/html'),link=doc.querySelector('a');return {text,images:doc.querySelectorAll('img').length,insertionLine:link?.previousSibling?.nodeName==='BR'&&link.previousSibling.previousSibling?.nodeName==='BR',url:link?.href};})()`;
+      const gifClipboard = await evaluateOn(fixture, readGifClipboard);
+      if (gifClipboard.text.replace(/\r\n?/g,'\n') !== 'Ordinary video\n\n视频译文\n\nhttps://x.com/qa/status/303' || gifClipboard.images || !gifClipboard.insertionLine) throw new Error('GIF clipboard layout failed: '+JSON.stringify(gifClipboard));
+      const [gifDownload] = await evaluateOn(swTab, `chrome.downloads.search({id:${videoGif.downloadId}})`);
+      const gifBytes = await fs.readFile(gifDownload.filename);
+      if (!gifBytes.subarray(0,6).toString().startsWith('GIF8') || gifBytes.at(-1)!==0x3b) throw new Error('Ordinary video GIF invalid');
+      const buttonLayout = await evaluateOn(fixture, `(()=>{const gif=document.querySelector('#video .x-copy-gif-button'),copy=document.querySelector('#video .x-copy-post-button');gif.scrollIntoView({block:'center'});const a=gif.getBoundingClientRect(),b=copy.getBoundingClientRect();return {width:a.width,height:a.height,ordered:a.right<=b.left,rightmost:copy.parentElement.lastElementChild===copy};})()`);
+      if (buttonLayout.width !== 30 || buttonLayout.height !== 30 || !buttonLayout.ordered || !buttonLayout.rightmost) throw new Error('GIF action layout invalid: '+JSON.stringify(buttonLayout));
+      const gifShot = await fixture.call('Page.captureScreenshot', { format: 'png' });
+      await fs.writeFile(path.join(directory, 'video-gif.png'), Buffer.from(gifShot.data,'base64'));
+      await evaluateOn(fixture, 'document.querySelector("#video .x-copy-gif-button").dispatchEvent(new MouseEvent("click",{altKey:true,bubbles:true}))');
+      const sourceGif = await waitFor(async () => {
+        const response = await evaluate('chrome.runtime.sendMessage({type:"getJobs"})');
+        const selected = response.data.find(job => job.postId === '303' && job.format === 'gif' && job.gifFps === 'source');
+        if (selected?.status === 'failed') throw new Error('Alt GIF download failed: '+JSON.stringify(selected));
+        return selected?.status === 'complete' ? selected : null;
+      }, 30000);
+      if (sourceGif.id === videoGif.id) throw new Error('GIF sampling modes deduplicated together');
+      const sourceGifClipboard = await evaluateOn(fixture, readGifClipboard);
+      if (JSON.stringify(sourceGifClipboard) !== JSON.stringify(gifClipboard) || await evaluateOn(fixture, '!!document.querySelector("#video [data-testid=unlike]")')) throw new Error('Alt GIF omitted translation, changed layout or liked the post');
+      await evaluateOn(fixture, 'document.querySelector("#video .x-copy-post-button").click()');
+      const videoMp4 = await waitFor(async () => {
+        const response = await evaluate('chrome.runtime.sendMessage({type:"getJobs"})');
+        const selected = response.data.find(job => job.postId === '303' && job.format === 'mp4');
+        return selected?.downloadId ? selected : null;
+      }, 30000);
+      const [mp4Download] = await evaluateOn(swTab, `chrome.downloads.search({id:${videoMp4.downloadId}})`);
+      const ordinaryVideoCopy = await evaluateOn(fixture, 'navigator.clipboard.readText()');
+      if (ordinaryVideoCopy.replace(/\r\n?/g,'\n') !== 'Ordinary video\n\n视频译文\nhttps://x.com/qa/status/303') throw new Error('GIF spacing leaked into ordinary copy');
+      // Native browser downloads are outside the page/worker Fetch fixtures.
+      // Assert the original URL reaches Chrome, rather than requiring the
+      // synthetic X URL to exist on the public server.
+      if (mp4Download.url !== 'https://video.twimg.com/ext_tw_video/303/a.mp4' || !mp4Download.filename.endsWith('.mp4')) throw new Error('Original MP4 download routing changed');
+      const evidence = { capturedIds, focusFailure, clipboard, originalOnly, mergedCopy, mergedOriginal, jobs, videoGif, gifClipboard, sourceGif, sourceGifClipboard, videoMp4, ordinaryVideoCopy, download: { bytes: saved.length, filename: downloaded[0].filename }, originalRequests: seen.filter(url => url.includes('name=orig')) };
       console.log(JSON.stringify({ e2e: evidence })); await fs.writeFile(path.join(directory, 'evidence.json'), JSON.stringify(evidence,null,2));
       const screenshot = await fixture.call('Page.captureScreenshot', { format: 'png' }); await fs.writeFile(path.join(directory, 'fixture.png'), Buffer.from(screenshot.data,'base64'));
+      const popupTarget = await control.call('Target.createTarget', { url: `chrome-extension://${extensionId}/popup.html` });
+      const popup = await connect(`ws://${new URL(debugOrigin).host}/devtools/page/${popupTarget.targetId}`);
+      await waitFor(() => evaluateOn(popup, 'document.getElementById("jobs")?.textContent.includes("GIF")'));
+      const popupShot = await popup.call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+      await fs.writeFile(path.join(directory, 'popup.png'), Buffer.from(popupShot.data,'base64'));
     }
   }
   await control.call('Browser.close'); page.socket.close(); control.socket.close();
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => { for(const socket of sockets)socket.close(); browser?.kill(); });
-setTimeout(() => { browser?.kill(); console.error('Extension verification exceeded 60 seconds'); process.exit(1); }, 60000).unref();
+const verificationTimeout = process.argv.includes('--stress') ? 900000 : process.argv.includes('--volume') ? 180000 : 60000;
+setTimeout(() => { browser?.kill(); console.error('Extension verification exceeded '+verificationTimeout+' ms'); process.exit(1); }, verificationTimeout).unref();

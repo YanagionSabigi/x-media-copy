@@ -1,14 +1,18 @@
 <!doctype html>
 <html lang="zh-CN"><meta charset="utf-8"><title>X 图文复制与媒体下载</title>
-<style>body{width:350px;margin:0;padding:18px;color:#17202a;background:#fff;font:14px/1.55 system-ui,sans-serif}h1{margin:0 0 8px;font-size:18px}h2{font-size:15px;margin:18px 0 6px}p{margin:8px 0}small{color:#536471}.job{padding:10px 0;border-top:1px solid #e5e7eb}.job p{margin:3px 0;word-break:break-word}.error{color:#b42318}button{padding:5px 9px;margin:4px 5px 0 0;border:1px solid #aeb8c2;border-radius:6px;background:#f5f8fa;cursor:pointer}button:disabled{opacity:.5;cursor:wait}#jobs{max-height:370px;overflow:auto}#feedback{min-height:18px}</style>
+<style>body{width:350px;margin:0;padding:18px;color:#17202a;background:#fff;font:14px/1.55 system-ui,sans-serif}h1{margin:0 0 8px;font-size:18px}h2{font-size:15px;margin:18px 0 6px}p{margin:8px 0}ul{margin:8px 0 14px;padding-left:20px}li{margin:6px 0}small{color:#536471}.job{padding:10px 0;border-top:1px solid #e5e7eb}.job p{margin:3px 0;word-break:break-word}.error{color:#b42318}button{padding:5px 9px;margin:4px 5px 0 0;border:1px solid #aeb8c2;border-radius:6px;background:#f5f8fa;cursor:pointer}button:disabled{opacity:.5;cursor:wait}#jobs{max-height:370px;overflow:auto}#feedback{min-height:18px}</style>
 <body>
 <h1>X 图文复制与媒体下载</h1>
-<p>点击帖子最右侧按钮：复制原文、译文、原图和出处，成功后点赞，并下载视频 / GIF。</p>
-<p><small><b>Alt + 点击</b>：复制源语言原文，不带译文；保留原图、出处链接、点赞和媒体下载。</small></p>
-<p><small><b>Shift + 点击</b>：将多张静态原图合成一张，保留正文、译文和出处；<b>Alt + Shift + 点击</b> 合图并省略译文。复制成功后仍会点赞并下载视频 / GIF。</small></p>
-<p><small>更新或重新加载扩展后，请刷新已打开的 X 页面。微信 / QQ 对混合图文的接收方式取决于客户端；GIF 和视频下载后可拖入聊天窗口。</small></p>
-<p><small>可见帖静态原图会限量预取；隐藏或离开页面时清理，不把预取缓存保存为本机文件。大图仍在点击时读取原图。</small></p>
-<h2>媒体下载任务</h2><div id="jobs">正在读取任务…</div><p id="feedback" role="status"></p>
-<p><small>全部在浏览器内处理。GIF 采用原尺寸，最长 60 秒；转换失败可下载原始 MP4。仅 HLS 资源可继续使用猫抓。</small></p>
-<p><small>© 2026 YanagionSabigi and contributors · <a href="LICENSE" target="_blank">GPL-3.0-or-later</a> · <a href="NOTICE.md" target="_blank">上游声明</a> · 按现状提供，无担保。</small></p>
+<p>X 推文底部最右侧会有复制按钮，有以下点击方式：</p>
+<ul>
+<li>直接点击：复制<strong>贴文、译文、图片与原贴链接</strong>；对带<strong>动图</strong>或<strong>视频</strong>的帖子，下载文件</li>
+<li>Alt+点击：不复制译文（适合在 Grok 翻译出错时）</li>
+<li>Shift+点击：将图片合成一张，适合将切分图合并发布</li>
+</ul>
+<p>视频帖子还有 GIF 按钮，两种方式均复制贴文、译文和出处链接，并留一行插入 GIF：</p>
+<ul>
+<li>直接点击：低采样率制作 GIF 并下载。</li>
+<li>Alt+点击：原帧率原采样率制作 GIF 并下载</li>
+</ul>
+<h2>媒体下载内容：</h2><div id="jobs">正在读取任务…</div><p id="feedback" role="status"></p>
 <script src="popup.js"></script></body></html>

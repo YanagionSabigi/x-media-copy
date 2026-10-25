@@ -2,6 +2,23 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const core = require("../core.js");
 
+test('GIF clipboard leaves one empty insertion line before the source in both formats', () => {
+  const result = core.buildClipboardPayload({ original: 'Source <text> #art', translation: '中文 & 译文 #艺术', postUrl: 'https://x.com/a/status/123?s=20', reserveGifLine: true });
+  assert.equal(result.plain, 'Source <text>\n\n中文 & 译文\n\nhttps://x.com/a/status/123');
+  assert.equal(result.html, '<div>Source &lt;text&gt;<br><br>中文 &amp; 译文<br><br><a href="https://x.com/a/status/123">https://x.com/a/status/123</a></div>');
+});
+
+test('GIF insertion spacing omits absent sections without fabricating translation or trailing lines', () => {
+  for (const [input, plain, html] of [
+    [{ original: 'Source', postUrl: 'https://x.com/a/status/1' }, 'Source\n\nhttps://x.com/a/status/1', '<div>Source<br><br><a href="https://x.com/a/status/1">https://x.com/a/status/1</a></div>'],
+    [{ postUrl: 'https://x.com/a/status/1' }, 'https://x.com/a/status/1', '<div><a href="https://x.com/a/status/1">https://x.com/a/status/1</a></div>'],
+    [{ original: 'Source', translation: '译文' }, 'Source\n\n译文', '<div>Source<br><br>译文</div>']
+  ]) {
+    const result = core.buildClipboardPayload({ ...input, reserveGifLine: true });
+    assert.equal(result.plain, plain); assert.equal(result.html, html);
+  }
+});
+
 test("clipboard output contains source text, translation, links and escaped HTML", () => {
   const result = core.buildClipboardPayload({
     original: "Hello <world>",

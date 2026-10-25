@@ -1,4 +1,4 @@
-.x-copy-post-button {
+.x-copy-post-button, .x-copy-gif-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -19,6 +19,10 @@
 .x-copy-post-button:hover { color: #1d9bf0; background: rgba(29,155,240,.12); }
 .x-copy-post-button:focus-visible { outline: 2px solid #1d9bf0; outline-offset: 2px; }
 .x-copy-post-button:disabled { opacity: .5; cursor: wait; }
+.x-copy-gif-button { padding: 2px; font: 700 10px/1 system-ui, sans-serif; }
+.x-copy-gif-button:hover { color: #1d9bf0; background: rgba(29,155,240,.12); }
+.x-copy-gif-button:focus-visible { outline: 2px solid #1d9bf0; outline-offset: 2px; }
+.x-copy-gif-button:disabled { opacity: .5; cursor: wait; }
 .x-copy-toast {
   position: fixed;
   z-index: 2147483647;

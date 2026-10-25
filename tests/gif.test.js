@@ -1,11 +1,34 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const gif = require('../gif.js');
-test('GIF validates real media dimensions, duration and decoded frame budget', () => {
+test('GIF accepts 20 second 1080p60 and 4K60 sources within per-frame and file limits', () => {
   assert.doesNotThrow(() => gif.validate({ size: 100000, width: 800, height: 640, duration: 3, fps: 24 }));
-  for (const patch of [{ size: 33 * 1024 ** 2 }, { duration: 61 }, { width: 4096, height: 4096, duration: 30 }, { fps: 0 }, { width: 0 }]) {
+  assert.doesNotThrow(() => gif.validate({ size: 100 * 1024 ** 2, width: 1920, height: 1080, duration: 20, fps: 60 }));
+  assert.doesNotThrow(() => gif.validate({ size: 100 * 1024 ** 2, width: 3840, height: 2160, duration: 20, fps: 60 }));
+  for (const patch of [{ size: 129 * 1024 ** 2 }, { duration: 61 }, { width: 4096, height: 4096, duration: 30 }, { fps: 0 }, { width: 0 }]) {
     assert.throws(() => gif.validate({ size: 1000, width: 800, height: 640, duration: 3, fps: 24, ...patch }));
   }
+});
+
+test('10 fps conversion limits width to 800 on both passes without changing playback speed', () => {
+  const args = gif.argumentsFor('input.mp4', 'output.gif', 10);
+  const palette = gif.paletteArguments('input.mp4', 10);
+  const filter = "fps=10,scale=w='min(800,iw)':h=-1:flags=lanczos";
+  assert.equal(palette[palette.indexOf('-vf') + 1], filter + ',palettegen=stats_mode=full');
+  assert.equal(args[args.indexOf('-lavfi') + 1], '[0:v:0]' + filter + '[sampled];[sampled][1:v:0]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle');
+  assert.equal(args[args.indexOf('-gifflags') + 1], '+offsetting+transdiff');
+  assert.doesNotMatch(palette.join(' '), /max_colors=/);
+  assert.ok(args.includes('-an'));
+  assert.doesNotMatch(args.join(' '), /setpts=|-r /);
+  assert.throws(() => gif.argumentsFor('a.mp4', 'b.gif', 30), /帧率/);
+  assert.throws(() => gif.paletteArguments('a.mp4', '15'), /帧率/);
+});
+
+test('legacy 15 fps GIF jobs retain their selected sampling rate', () => {
+  assert.match(gif.argumentsFor('input.mp4', 'output.gif', 15).join(' '), /fps=15,scale=/);
+  assert.match(gif.paletteArguments('input.mp4', 15).join(' '), /fps=15,scale=/);
+  assert.match(gif.argumentsFor('input.mp4', 'output.gif', 15).join(' '), /paletteuse=dither=sierra2_4a/);
+  assert.doesNotMatch(gif.argumentsFor('input.mp4', 'output.gif', 15).join(' '), /bayer/);
 });
 test('GIF conversion keeps dimensions and frame cadence and creates an infinite loop', () => {
   const args = gif.argumentsFor('input.mp4', 'output.gif');
@@ -13,6 +36,8 @@ test('GIF conversion keeps dimensions and frame cadence and creates an infinite 
   assert.ok(args.includes('0'));
   assert.match([...gif.paletteArguments('input.mp4'), ...args].join(' '), /palettegen.*paletteuse/);
   assert.doesNotMatch(args.join(' '), /scale=|fps=|-t |crop=/);
+  assert.match(args.join(' '), /paletteuse=dither=sierra2_4a/);
+  assert.doesNotMatch(args.join(' '), /bayer/);
 });
 test('GIF probe handles rational frame rates and rejects broken probe data', () => {
   assert.deepEqual(gif.parseProbe({ streams: [{ width: 100, height: 90, avg_frame_rate: '30000/1001' }], format: { duration: '1.5' } }, 1000), { size: 1000, width: 100, height: 90, fps: 30000 / 1001, duration: 1.5 });

@@ -5,6 +5,8 @@ if (typeof importScripts === 'function') importScripts('media.js');
   const media = typeof module !== 'undefined' && module.exports ? require('./media.js') : root.XCopyMedia;
   const ACTIVE = new Set(['queued', 'converting', 'downloading']);
   const CAT_IDS = ['jfedfbgedapdagkghmgibemcoggfppbb', 'oohmdefbjalncfplafanlagojlakmjci'];
+  const formatFor = job => job.format || (job.type === 'animated_gif' ? 'gif' : 'mp4');
+  const gifFpsFor = job => job.gifFps === undefined ? 'source' : job.gifFps;
   function createService(api, dependencies = {}) {
     const request = dependencies.fetch || fetch;
     const now = dependencies.now || Date.now;
@@ -45,12 +47,20 @@ if (typeof importScripts === 'function') importScripts('media.js');
     async function ensureOffscreen() {
       const contexts = await api.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [api.runtime.getURL('offscreen.html')] });
       if (contexts.length) return;
-      if (!creating) creating = api.offscreen.createDocument({ url: 'offscreen.html', reasons: ['WORKERS', 'BLOBS'], justification: 'Convert downloaded X animation MP4 to GIF locally and retain its download URL.' }).finally(() => { creating = null; });
+      if (!creating) creating = api.offscreen.createDocument({ url: 'offscreen.html', reasons: ['WORKERS', 'BLOBS'], justification: 'Convert downloaded X video or animation to GIF locally and retain its download URL.' }).finally(() => { creating = null; });
       await creating;
     }
     async function offscreen(message) {
       await ensureOffscreen();
-      const result = await api.runtime.sendMessage({ target: 'offscreen', ...message });
+      let result = await api.runtime.sendMessage({ target: 'offscreen', ...message });
+      const started = now();
+      // Each request returns promptly, including conversions over Chrome's
+      // five-minute per-request limit. Offscreen heartbeats retain progress.
+      while (result?.ok && result.pending) {
+        if (now() - started > 11 * 60 * 1000) throw new Error('GIF 转换结果等待超时，请重试');
+        await new Promise(resolve => later(resolve, 3000));
+        result = await api.runtime.sendMessage({ target: 'offscreen', type: 'getConversionResult', conversionId: message.conversionId });
+      }
       if (!result?.ok) throw new Error(result?.error || 'GIF 转换器无响应');
       return result;
     }
@@ -309,29 +319,31 @@ if (typeof importScripts === 'function') importScripts('media.js');
       const matched = media.matchCaptured(items, captured);
       return items.map(item => matched.find(match => match.type === item.type && (match.id || match.poster) === (item.id || item.poster)) || item);
     }
-    function schedule(job, forceMp4 = false) {
+    function schedule(job) {
       const generation = job.generation || 0;
-      const run = () => runJob(job, forceMp4, generation);
-      if (job.type === 'animated_gif') gifQueue = gifQueue.then(run).catch(() => {});
+      const format = formatFor(job);
+      const gifFps = gifFpsFor(job);
+      const run = () => runJob(job, format, generation, gifFps);
+      if (format === 'gif') gifQueue = gifQueue.then(run).catch(() => {});
       else void run();
     }
-    async function runJob(job, forceMp4, generation) {
+    async function runJob(job, format, generation, gifFps) {
       const current = () => (job.generation || 0) === generation && job.status !== 'cancelled';
       if (!current()) return;
       let blobUrl;
       try {
         let url = job.url;
-        if (job.type === 'animated_gif' && !forceMp4) {
+        if (format === 'gif') {
           job.status = 'converting'; job.stage = '读取并转换 GIF'; await save(job);
           if (!current()) return;
-          const result = await offscreen({ type: 'convertGif', jobId: job.id, url: job.url });
+          const result = await offscreen({ type: 'convertGif', jobId: job.id, conversionId: `${job.id}:${generation}`, url: job.url, gifFps });
           blobUrl = result.url;
           if (!blobUrl?.startsWith(`blob:chrome-extension://${api.runtime.id}/`)) throw new Error('转换器返回了无效文件');
           url = blobUrl;
         }
         if (!current()) { if (blobUrl) await offscreen({ type: 'releaseBlob', jobId: job.id }); return; }
         job.status = 'downloading'; job.stage = '浏览器正在下载';
-        job.extension = job.type === 'animated_gif' && !forceMp4 ? 'gif' : 'mp4';
+        job.extension = format;
         // Persist the state before starting the browser download; completion is event-driven.
         await save(job);
         if (!current()) return;
@@ -382,14 +394,19 @@ if (typeof importScripts === 'function') importScripts('media.js');
       if (message.type === 'resolveMedia' && kind === 'page') return resolveMedia(message.media, sender.tab.id);
       if (message.type === 'downloadMedia' && kind === 'page') {
         if (!/^\d{1,30}$/.test(message.postId) || !Array.isArray(message.media) || message.media.length > 16) throw new Error('帖子或媒体列表无效');
+        if (message.format !== undefined && !['gif', 'mp4'].includes(message.format)) throw new Error('下载格式无效');
+        if (message.gifFps !== undefined && ![10, 15, 'source'].includes(message.gifFps)) throw new Error('GIF 帧率模式无效');
         const selected = message.media.map(media.normalizeMedia).filter(item => item && item.type !== 'photo');
         const added = [];
         for (const [index, item] of selected.entries()) {
-          const existing = jobs.find(job => job.postId === message.postId && job.type === item.type && job.url === item.url && ACTIVE.has(job.status));
+          const format = message.format || formatFor(item);
+          const gifFps = gifFpsFor(message);
+          const existing = jobs.find(job => job.postId === message.postId && job.tabId === sender.tab.id && job.type === item.type && job.url === item.url && formatFor(job) === format && (format !== 'gif' || gifFpsFor(job) === gifFps) && ACTIVE.has(job.status));
           if (existing) { added.push({ ...existing }); continue; }
           jobs = jobs.filter(job => ACTIVE.has(job.status) || jobs.indexOf(job) >= jobs.length - 60);
           if (jobs.length >= 100) throw new Error('下载任务过多，请等待现有任务结束');
-          const job = { id: crypto.randomUUID(), postId: message.postId, tabId: sender.tab.id, type: item.type, url: item.url, index,
+          const job = { id: crypto.randomUUID(), postId: message.postId, tabId: sender.tab.id, type: item.type, format, url: item.url, index,
+            ...(format === 'gif' ? { gifFps } : {}),
             status: item.url ? 'queued' : 'failed', error: item.url ? '' : '尚未取得该帖完整 MP4；请播放媒体后重试，或使用猫抓处理 HLS', createdAt: Date.now() };
           jobs.push(job); added.push({ ...job });
           await save(job);
@@ -407,15 +424,15 @@ if (typeof importScripts === 'function') importScripts('media.js');
           job.generation = (job.generation || 0) + 1;
           job.status = 'cancelled'; job.stage = ''; await save(job);
           if (downloadId) try { await api.downloads.cancel(downloadId); } catch { /* Already terminal. */ }
-          if (job.type === 'animated_gif') try { await offscreen({ type: 'cancelConversion', jobId: job.id }); } catch { /* Nothing running. */ }
+          if (formatFor(job) === 'gif') try { await offscreen({ type: 'cancelConversion', jobId: job.id }); } catch { /* Nothing running. */ }
         } else {
           if (ACTIVE.has(job.status)) return { ...job };
           if (!media.validVideoUrl(job.url)) throw new Error('没有完整 MP4 地址，请回到原帖播放媒体后重新点击');
           job.generation = (job.generation || 0) + 1;
           job.status = 'queued'; job.error = ''; delete job.downloadId;
+          if (message.type === 'retryMp4') job.format = 'mp4';
           await save(job);
-          const force = message.type === 'retryMp4';
-          schedule(job, force);
+          schedule(job);
         }
         return { ...job };
       }

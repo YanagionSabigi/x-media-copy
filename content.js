@@ -320,7 +320,7 @@
     } else if (clipboard.inspectImages) images = await clipboard.inspectImages(images);
     assertPage(epoch);
     const imageCount = images.length;
-    await clipboard.writeText({ ...data, images });
+    await clipboard.writeText({ ...data, images, mergedImage: merging ? images[0] : null });
     // The system clipboard owns its data now; do not pin a large temporary
     // copy while waiting for like confirmation or optional media resolution.
     images = null;
@@ -394,6 +394,62 @@
     }
     finally { discardImageRead(imageRead); button.disabled = false; button.removeAttribute("aria-busy"); button.setAttribute("aria-label", "复制贴文和出处链接，并自动点赞"); }
   }
+  async function handleGif(article, button, sourceFps = false) {
+    if (copying || button.disabled) { toast('正在复制，请稍候'); return; }
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    let copied = false;
+    try {
+      await runCopy(async () => {
+        assertContext();
+        checkNavigation();
+        const epoch = imageEpoch;
+        assertPage(epoch);
+        const postUrl = extractor.postUrl(article);
+        if (!postUrl) throw new Error('未读取到帖子链接，请在原帖上重试');
+        if (!getMedia(article, postUrl).some(item => item.type === 'video')) throw new Error('当前帖子没有可转换的视频');
+        const getArticle = () => findPost(postUrl) || article;
+        const texts = await extractor.captureTexts(article, { cachedOriginal: originals.get(postUrl), getArticle, includeTranslation: true });
+        assertPage(epoch);
+        if (extractor.postUrl(getArticle()) !== postUrl) throw new Error('帖子已离开页面，请在原帖上重试');
+        if (texts.original) originals.set(postUrl, texts.original);
+        let media = getMedia(getArticle(), postUrl).filter(item => item.type === 'video');
+        if (!media.length) throw new Error('当前帖子没有可转换的视频');
+        await clipboard.writeText({ ...texts, postUrl, reserveGifLine: true });
+        assertPage(epoch);
+        copied = true;
+        toast('已复制，可粘贴；正在提交 GIF 下载');
+        // Preserve the source snapshot once copying succeeds, including when
+        // the page is hidden while resolving its original MP4 address.
+        if (media.some(item => !item.url)) media = await send({ type: 'resolveMedia', media });
+        const jobs = await send({ type: 'downloadMedia', format: 'gif', gifFps: sourceFps ? 'source' : 10, postId: postUrl.match(/\/status\/(\d+)/)?.[1], media });
+        const failed = jobs.filter(job => job.status === 'failed');
+        toast(`已复制，可粘贴；${failed.length ? failed.map(job => job.error).join('；') : `已提交 ${jobs.length} 个 GIF 下载任务，可在扩展图标中查看或取消`}`, failed.length > 0);
+      });
+    } catch (error) {
+      if (copied && !contextError(error)) toast(`已复制，可粘贴；GIF 下载未启动：${error.message}`, true);
+      else showError(error);
+    }
+    finally { button.disabled = false; button.removeAttribute('aria-busy'); }
+  }
+  function syncGifButton(article, group, postUrl) {
+    let button = [...article.querySelectorAll('.x-copy-gif-button')].find(node => node.closest('article') === article);
+    if (!getMedia(article, postUrl).some(item => item.type === 'video')) { button?.remove(); return; }
+    if (!button) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.xCopyUi = 'true';
+      button.className = 'x-copy-gif-button';
+      button.textContent = 'GIF';
+      button.setAttribute('aria-label', '复制贴文、译文和出处；将本帖视频按 10 fps、宽度最多 800 px 下载为无声 GIF；Alt+点击保留源帧率和原尺寸');
+      button.title = '直接点击：低采样率制作 GIF；Alt+点击：原帧率原采样率制作 GIF';
+      button.addEventListener('click', event => {
+        event.preventDefault(); event.stopPropagation(); void handleGif(article, button, event.altKey);
+      });
+    }
+    const copy = [...group.children].find(node => node.classList.contains('x-copy-post-button'));
+    if (button.parentElement !== group || (copy ? button.nextElementSibling !== copy : group.lastElementChild !== button)) group.insertBefore(button, copy || null);
+  }
   function addButtons() {
     if (invalidated) return;
     checkNavigation();
@@ -410,6 +466,7 @@
       const group = groups.find(node => [...node.querySelectorAll('[data-testid="reply"], [data-testid="retweet"], [data-testid="unretweet"], [data-testid="like"], [data-testid="unlike"]')]
         .some(action => extractor.owns(article, action)));
       if (!group) continue; // Wait for X to render its actual post action bar.
+      syncGifButton(article, group, postUrl);
       const existing = [...article.querySelectorAll(".x-copy-post-button")].find(node => node.closest("article") === article);
       if (existing) {
         if (existing.parentElement !== group || group.lastElementChild !== existing) group.append(existing);
@@ -420,7 +477,7 @@
       button.dataset.xCopyUi = "true";
       button.className = "x-copy-post-button";
       button.setAttribute("aria-label", "复制贴文和出处链接，并自动点赞");
-      button.title = "复制图文并点赞，下载视频/GIF；Shift + 点击将多张原图合成一张；Alt + 点击不复制译文";
+      button.title = "复制按钮";
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("viewBox", "0 0 24 24");
       svg.setAttribute("aria-hidden", "true");

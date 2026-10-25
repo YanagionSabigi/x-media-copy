@@ -46,6 +46,119 @@ const tick = ms => new Promise(resolve => setTimeout(resolve, ms));
 const photoPost = (id, extra = '') => `<article><img src="https://pbs.twimg.com/media/P${id}.jpg">${extra}${link(id)}${bar}</article>`;
 const imageResult = request => request.urls.map(url => ({ url, dataUrl: 'data:image/jpeg;base64,AAAA' }));
 
+test('both GIF modes copy original and translation with an insertion line, then download only GIF', async () => {
+  const calls = [];
+  const setup = fixture(`<article><div data-testid="tweetText">Original #art</div><div data-testid="tweetText">译文 #艺术</div><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video><video poster="https://pbs.twimg.com/tweet_video_thumb/ABC.jpg"></video>${link(1)}${bar}</article>`, { media: true, message: request => { assert.ok(setup.writes.length > 0); calls.push(request); return [{ status: 'queued' }]; } });
+  try {
+    const button = setup.document.querySelector('.x-copy-gif-button');
+    assert.ok(button);
+    assert.equal(setup.document.querySelector('.actions').lastElementChild.className, 'x-copy-post-button');
+    button.click(); await tick(20);
+    const requests = calls.filter(request => request.type === 'downloadMedia');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].format, 'gif');
+    assert.equal(requests[0].gifFps, 10);
+    assert.equal(requests[0].postId, '1');
+    assert.equal(requests[0].media.length, 1);
+    assert.equal(requests[0].media[0].type, 'video');
+    assert.equal(setup.writes.length, 1); assert.equal(setup.likes.length, 0);
+    assert.equal(setup.writes[0].plain, 'Original\n\n译文\n\nhttps://x.com/a/status/1');
+    assert.match(setup.writes[0].html, /译文<br><br><a /);
+    assert.doesNotMatch(setup.writes[0].html, /<img/);
+    assert.equal(button.disabled, false);
+    button.dispatchEvent(new setup.dom.window.MouseEvent('click', { altKey: true, bubbles: true })); await tick(20);
+    assert.equal(calls.filter(request => request.type === 'downloadMedia').at(-1).gifFps, 'source');
+    assert.equal(setup.writes.length, 2); assert.equal(setup.likes.length, 0);
+    assert.deepEqual(setup.writes[1], setup.writes[0]);
+    setup.document.querySelector('.x-copy-post-button').click(); await tick(20);
+    assert.equal(calls.filter(request => request.type === 'downloadMedia').at(-1).format, undefined);
+    assert.equal(setup.writes.length, 3);
+    assert.equal(setup.writes[2].plain, 'Original\n\n译文\nhttps://x.com/a/status/1');
+  } finally { setup.dom.window.close(); }
+});
+
+test('GIF copy focus failure does not submit a download in either mode', async () => {
+  for (const altKey of [false, true]) {
+    const calls = [];
+    const setup = fixture(`<article><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, { media: true, beforeWrite: async () => { throw new Error('Document is not focused'); }, message: request => { calls.push(request); return []; } });
+    try {
+      const button = setup.document.querySelector('.x-copy-gif-button');
+      button.dispatchEvent(new setup.dom.window.MouseEvent('click', { altKey })); await tick(20);
+      assert.equal(setup.writes.length, 0); assert.equal(setup.likes.length, 0); assert.equal(calls.length, 0);
+      assert.equal(button.disabled, false);
+      assert.match(setup.document.querySelector('.x-copy-toast-error').textContent, /回到 X/);
+    } finally { setup.dom.window.close(); }
+  }
+});
+
+test('GIF download stops when the extension is invalidated during clipboard writing', async () => {
+  let invalidated = false; const calls = [];
+  const setup = fixture(`<article><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, { media: true, invalidated: () => invalidated, beforeWrite: async () => { invalidated = true; }, message: request => { calls.push(request); return []; } });
+  try {
+    setup.document.querySelector('.x-copy-gif-button').click(); await tick(20);
+    assert.equal(setup.writes.length, 1); assert.equal(calls.length, 0); assert.equal(setup.likes.length, 0);
+    assert.match(setup.document.querySelector('.x-copy-toast-error').textContent, /刷新/);
+  } finally { setup.dom.window.close(); }
+});
+
+test('GIF copy rejects a recycled source post while translation is being captured', async () => {
+  const calls = [];
+  const setup = fixture(`<article><div data-testid="tweetText">Source</div><button id="translate">显示翻译</button><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, { media: true, message: request => { calls.push(request); return []; } });
+  try {
+    setup.document.querySelector('#translate').onclick = () => {
+      setup.document.querySelector('article a').href = 'https://x.com/a/status/2';
+      setup.document.querySelector('article').insertAdjacentHTML('beforeend', '<div data-testid="tweetText">译文</div>');
+    };
+    setup.document.querySelector('.x-copy-gif-button').click(); await tick(700);
+    assert.equal(setup.writes.length, 0); assert.equal(calls.length, 0);
+    assert.match(setup.document.querySelector('.x-copy-toast-error').textContent, /离开页面/);
+  } finally { setup.dom.window.close(); }
+});
+
+test('GIF and copy buttons serialize clipboard writes while a GIF copy is pending', async () => {
+  let finish; const calls = [];
+  const setup = fixture(`<article><div data-testid="tweetText">Source</div><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, { media: true, beforeWrite: () => new Promise(resolve => { finish = resolve; }), message: request => { calls.push(request); return [{ status: 'queued' }]; } });
+  try {
+    setup.document.querySelector('.x-copy-gif-button').click(); await tick(0);
+    setup.document.querySelector('.x-copy-post-button').click(); await tick(0);
+    assert.equal(setup.writes.length, 0); assert.equal(calls.length, 0); assert.equal(setup.likes.length, 0);
+    finish(); await tick(20);
+    assert.equal(setup.writes.length, 1); assert.equal(calls.filter(call => call.type === 'downloadMedia').length, 1);
+    assert.equal(setup.writes[0].plain, 'Source\n\nhttps://x.com/a/status/1');
+  } finally { setup.dom.window.close(); }
+});
+
+test('GIF action resolves unloaded videos and reports failed jobs', async () => {
+  const calls = [];
+  const setup = fixture(`<article><video poster="https://pbs.twimg.com/ext_tw_video_thumb/11/a.jpg"></video>${link(1)}${bar}</article>`, { media: true, message: request => {
+    calls.push(request);
+    return request.type === 'resolveMedia' ? [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] : [{ status: 'failed', error: '无法转换' }];
+  } });
+  try {
+    const button = setup.document.querySelector('.x-copy-gif-button'); assert.ok(button);
+    button.click(); await tick(20);
+    assert.deepEqual(calls.map(request => request.type), ['resolveMedia', 'downloadMedia']);
+    assert.equal(calls[1].format, 'gif');
+    assert.match(setup.document.querySelector('.x-copy-toast-error').textContent, /无法转换/);
+    assert.equal(button.disabled, false);
+  } finally { setup.dom.window.close(); }
+});
+
+test('GIF action follows recycled articles and excludes photos, X animations and quoted videos', async () => {
+  const setup = fixture(`<article><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>` + photoPost(2) + `<article><video poster="https://pbs.twimg.com/tweet_video_thumb/ABC.jpg"></video>${link(3)}${bar}</article>` + `<article><div data-testid="quoteTweet"><video></video></div>${link(4)}${bar}</article>`, { media: true });
+  try {
+    assert.equal(setup.document.querySelectorAll('.x-copy-gif-button').length, 1);
+    const article = setup.document.querySelector('article');
+    article.querySelector('video').remove();
+    article.querySelector('a').href = 'https://x.com/a/status/5';
+    await tick(650);
+    assert.equal(setup.document.querySelectorAll('.x-copy-gif-button').length, 0);
+    article.insertAdjacentHTML('afterbegin', '<video></video>'); await tick(650);
+    assert.equal(article.querySelectorAll('.x-copy-gif-button').length, 1);
+    assert.equal(article.querySelector('.actions').lastElementChild.className, 'x-copy-post-button');
+  } finally { setup.dom.window.close(); }
+});
+
 test('click promotes missing originals immediately while speculative reads remain pending', async () => {
   const calls = []; let finish;
   const setup = fixture(photoPost(1), { media: true, message: request => { calls.push(request); if (request.type === 'prefetchImages') return new Promise(resolve => { finish = () => resolve(imageResult(request)); }); return request.urls ? imageResult(request) : true; } });
@@ -455,6 +568,10 @@ test('Shift copies text and translation with only the merged photo, then likes',
   const requests = [];
   const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {
     media: true,
+    beforeWrite: data => {
+      assert.equal(data.mergedImage?.dataUrl, 'data:image/png;base64,TUVSR0VE');
+      assert.equal(data.mergedImage, data.images[0]);
+    },
     mergeImages: async images => {
       assert.equal(images.length, 2);
       assert.equal(setup.likes.length, 0);

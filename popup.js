@@ -27,15 +27,16 @@
       const list = document.getElementById('jobs'); list.replaceChildren();
       if (!jobs.length) { list.textContent = '还没有媒体下载任务。'; return; }
       for (const job of jobs.slice().reverse()) {
+        const format = job.format || (job.type === 'animated_gif' ? 'gif' : 'mp4');
         const row = document.createElement('div'); row.className = 'job';
-        const heading = document.createElement('p'); heading.textContent = `${job.type === 'animated_gif' ? 'GIF' : '视频'} · ${job.postId} · ${labels[job.status] || job.status}`;
+        const heading = document.createElement('p'); heading.textContent = `${format === 'gif' ? `GIF（${[10, 15].includes(job.gifFps) ? `${job.gifFps} fps / 最宽 800 px` : '源帧率 / 原尺寸'}）` : '视频'} · ${job.postId} · ${labels[job.status] || job.status}`;
         row.append(heading);
         if (job.stage) { const stage = document.createElement('small'); stage.textContent = job.stage; row.append(stage); }
         if (job.error) { const error = document.createElement('p'); error.className = 'error'; error.textContent = job.error; row.append(error); }
         if (['queued', 'converting', 'downloading'].includes(job.status)) button(row, '取消', () => send({ type: 'cancelJob', jobId: job.id }));
         else if (job.status === 'failed' || job.status === 'cancelled') {
           button(row, '重试', () => send({ type: 'retryJob', jobId: job.id }));
-          if (job.type === 'animated_gif' && job.url) button(row, '下载原始 MP4', () => send({ type: 'retryMp4', jobId: job.id }));
+          if (format === 'gif' && job.url) button(row, '下载原始 MP4', () => send({ type: 'retryMp4', jobId: job.id }));
         }
         if (job.status === 'complete' && job.downloadId) button(row, '在文件夹中显示', () => chrome.downloads.show(job.downloadId));
         list.append(row);

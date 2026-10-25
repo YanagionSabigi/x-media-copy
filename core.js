@@ -56,7 +56,7 @@
     return escapeHtml(value).replace(/\n/g, "<br>");
   }
 
-  function buildClipboardPayload({ original, translation, postUrl, images = [] }) {
+  function buildClipboardPayload({ original, translation, postUrl, images = [], reserveGifLine = false }) {
     original = stripHashtags(original);
     translation = stripHashtags(translation);
     postUrl = canonicalPostUrl(postUrl);
@@ -64,7 +64,7 @@
     if (original) sections.push(original);
     if (translation) sections.push(translation);
     const text = sections.join("\n\n");
-    const plain = [text, postUrl].filter(Boolean).join('\n');
+    const plain = [text, postUrl].filter(Boolean).join(reserveGifLine ? '\n\n' : '\n');
 
     const htmlSections = [];
     if (original) htmlSections.push(htmlText(original));
@@ -77,7 +77,8 @@
     }
     const body = htmlSections.join('<br><br>');
     const link = postUrl ? `<a href="${escapeHtml(postUrl)}">${escapeHtml(postUrl)}</a>` : '';
-    return { plain, html: `<div>${[body, imageHtml, link].filter(Boolean).join('<br>')}</div>` };
+    const content = [body, imageHtml].filter(Boolean).join('<br>');
+    return { plain, html: `<div>${[content, link].filter(Boolean).join(reserveGifLine ? '<br><br>' : '<br>')}</div>` };
   }
 
   const api = { cleanText, stripHashtags, canonicalPostUrl, buildClipboardPayload };

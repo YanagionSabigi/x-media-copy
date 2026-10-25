@@ -19,6 +19,98 @@ function setup(options = {}) {
 const page = { id: 'extension', tab: { id: 7 }, url: 'https://x.com/home' };
 const popup = { id: 'extension', url: 'chrome-extension://extension/popup.html' };
 
+test('10 fps, legacy 15 fps and source GIF jobs stay independent, serial and retain mode on retry', async () => {
+  const modes = []; let active = 0, peak = 0;
+  const { service } = setup({ convert: async message => {
+    if (message.type !== 'convertGif') return { ok: true };
+    active++; peak = Math.max(peak, active); modes.push(message.gifFps);
+    await new Promise(resolve => setTimeout(resolve, 10)); active--;
+    throw new Error('conversion failed');
+  } });
+  const request = { type: 'downloadMedia', format: 'gif', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] };
+  const [sampled] = await service.handle({ ...request, gifFps: 10 }, page);
+  const [source] = await service.handle({ ...request, gifFps: 'source' }, page);
+  const [legacy] = await service.handle({ ...request, gifFps: 15 }, page);
+  const [duplicate] = await service.handle({ ...request, gifFps: 10 }, page);
+  assert.notEqual(sampled.id, source.id); assert.equal(duplicate.id, sampled.id);
+  assert.notEqual(legacy.id, sampled.id);
+  assert.equal(sampled.gifFps, 10); assert.equal(source.gifFps, 'source'); assert.equal(legacy.gifFps, 15);
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.deepEqual(modes, [10, 'source', 15]); assert.equal(peak, 1);
+  await service.handle({ type: 'retryJob', jobId: sampled.id }, popup);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(modes, [10, 'source', 15, 10]);
+});
+
+test('GIF requests reject unsupported sampling modes without adding jobs', async () => {
+  const { service } = setup();
+  for (const gifFps of [0, 30, '15', null]) await assert.rejects(service.handle({ type: 'downloadMedia', format: 'gif', gifFps, postId: '123', media: [] }, page), /帧率/);
+  assert.deepEqual(await service.handle({ type: 'getJobs' }, popup), []);
+});
+
+test('long GIF conversion uses short acknowledged requests and generation-tagged result polling', async () => {
+  const messages = []; let polls = 0;
+  const { service, calls } = setup({
+    setTimeout: callback => setTimeout(callback, 0), clearTimeout,
+    convert: async message => {
+      messages.push(message);
+      if (message.type === 'convertGif') return { ok: true, pending: true };
+      if (message.type === 'getConversionResult') return ++polls === 1 ? { ok: true, pending: true } : { ok: true, url: 'blob:chrome-extension://extension/long-conversion' };
+      return { ok: true };
+    }
+  });
+  const [job] = await service.handle({ type: 'downloadMedia', format: 'gif', gifFps: 15, postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] }, page);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'blob:chrome-extension://extension/long-conversion');
+  const conversion = messages.find(message => message.type === 'convertGif');
+  assert.equal(conversion.conversionId, job.id + ':0');
+  assert.equal(conversion.gifFps, 15);
+  assert.equal(messages.filter(message => message.type === 'getConversionResult').length, 2);
+  assert.ok(messages.filter(message => message.type === 'getConversionResult').every(message => message.conversionId === conversion.conversionId));
+});
+
+test('ordinary video GIF and original MP4 jobs coexist and duplicate GIF requests share a job', async () => {
+  const conversions = [];
+  const { service, calls } = setup({ convert: async message => { conversions.push(message); return { ok: true, url: 'blob:chrome-extension://extension/video-gif' }; } });
+  const request = { type: 'downloadMedia', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] };
+  const [original] = await service.handle(request, page);
+  const [converted] = await service.handle({ ...request, format: 'gif' }, page);
+  const [duplicate] = await service.handle({ ...request, format: 'gif' }, page);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.notEqual(original.id, converted.id);
+  assert.equal(duplicate.id, converted.id);
+  assert.equal(converted.type, 'video');
+  assert.equal(converted.format, 'gif');
+  assert.equal(conversions.filter(message => message.type === 'convertGif').length, 1);
+  assert.deepEqual(calls.map(call => call.filename).sort(), ['X/123_1.gif', 'X/123_1.mp4']);
+  assert.equal(calls.find(call => call.filename.endsWith('.mp4')).url, 'https://video.twimg.com/ext_tw_video/11/a.mp4');
+});
+
+test('ordinary video GIF can be cancelled, retried as GIF, or explicitly downloaded as MP4', async () => {
+  const messages = [];
+  const { service, calls } = setup({ convert: async message => { messages.push(message); if (message.type === 'convertGif') throw new Error('conversion failed'); return { ok: true }; } });
+  const [job] = await service.handle({ type: 'downloadMedia', format: 'gif', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] }, page);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal((await service.handle({ type: 'getJobs' }, popup))[0].status, 'failed');
+  assert.equal(calls.length, 0);
+  await service.handle({ type: 'cancelJob', jobId: job.id }, popup);
+  assert.ok(messages.some(message => message.type === 'cancelConversion'));
+  await service.handle({ type: 'retryJob', jobId: job.id }, popup);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(messages.filter(message => message.type === 'convertGif').length, 2);
+  await service.handle({ type: 'retryMp4', jobId: job.id }, popup);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].filename, /\.mp4$/);
+});
+
+test('unsupported download formats are rejected before adding jobs', async () => {
+  const { service } = setup();
+  await assert.rejects(service.handle({ type: 'downloadMedia', format: 'wav', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] }, page));
+  assert.deepEqual(await service.handle({ type: 'getJobs' }, popup), []);
+});
+
 test('background rejects external senders and arbitrary media fetch URLs', async () => {
   const { service } = setup();
   await assert.rejects(service.handle({ type: 'prepareImages', urls: ['https://evil.test/a.jpg'] }, page));

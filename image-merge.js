@@ -75,6 +75,49 @@
       reader.readAsDataURL(blob);
     });
   }
+  const crcTable = Uint32Array.from({ length: 256 }, (_, n) => {
+    let value = n;
+    for (let bit = 0; bit < 8; bit++) value = (value & 1) ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    return value >>> 0;
+  });
+  async function optimizePng(blob, check = () => {}) {
+    check();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    check();
+    const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+    if (!signature.every((value, index) => bytes[index] === value)) throw new Error('无损 PNG 数据无效');
+    const view = new DataView(bytes.buffer), chunks = [], idats = [];
+    let offset = 8, ended = false;
+    while (offset + 12 <= bytes.length) {
+      const size = view.getUint32(offset), end = offset + size + 12;
+      if (end > bytes.length) throw new Error('无损 PNG 数据不完整');
+      const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+      chunks.push({ type, bytes: bytes.subarray(offset, end) });
+      if (type === 'IDAT') idats.push(bytes.subarray(offset + 8, end - 4));
+      offset = end;
+      if (type === 'IEND') { ended = true; break; }
+    }
+    if (!ended || !idats.length || offset !== bytes.length) throw new Error('无损 PNG 数据不完整');
+    // Recompress the exact filtered scanline stream. No pixel decoding,
+    // palette reduction, colour conversion, resizing or transparency changes.
+    const stream = new Blob(idats).stream().pipeThrough(new DecompressionStream('deflate')).pipeThrough(new CompressionStream('deflate'));
+    const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+    check();
+    const idat = new Uint8Array(compressed.length + 12), outputView = new DataView(idat.buffer);
+    outputView.setUint32(0, compressed.length); idat.set([73, 68, 65, 84], 4); idat.set(compressed, 8);
+    let crc = 0xffffffff;
+    for (let i = 4; i < idat.length - 4; i++) crc = crcTable[(crc ^ idat[i]) & 255] ^ (crc >>> 8);
+    outputView.setUint32(idat.length - 4, (crc ^ 0xffffffff) >>> 0);
+    let inserted = false;
+    const parts = [bytes.subarray(0, 8)];
+    for (const chunk of chunks) {
+      if (chunk.type !== 'IDAT') parts.push(chunk.bytes);
+      else if (!inserted) { parts.push(idat); inserted = true; }
+    }
+    const optimized = new Blob(parts, { type: 'image/png' });
+    check();
+    return optimized.size < blob.size ? optimized : blob;
+  }
   async function mergeImages(images, check = () => {}) {
     check();
     if (images.length < 2) return images;
@@ -100,15 +143,16 @@
         try { check(); ctx.drawImage(bitmap, layout.placements[i].x, layout.placements[i].y); }
         finally { bitmap.close(); }
       }
-      const blob = await canvas.convertToBlob({ type: 'image/png' });
+      let blob = await canvas.convertToBlob({ type: 'image/png' });
       check();
       if (blob.size > MAX_BYTES) throw new Error('合成 PNG 超过 24 MiB，请用普通点击分别复制');
+      blob = await optimizePng(blob, check);
       const encoded = await dataUrl(blob);
       check();
       return [{ dataUrl: encoded, width: layout.width, height: layout.height }];
     } finally { canvas.width = canvas.height = 1; }
   }
-  const api = { chooseLayout, mergeImages };
+  const api = { chooseLayout, mergeImages, optimizePng };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.XCopyImageMerge = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
