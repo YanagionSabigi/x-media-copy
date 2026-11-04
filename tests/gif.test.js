@@ -10,7 +10,7 @@ test('GIF accepts 20 second 1080p60 and 4K60 sources within per-frame and file l
   }
 });
 
-test('the single slim preset uses 10 fps / max 480 px / 128 colors on both passes', () => {
+test('the default slim preset uses 10 fps / max 480 px / 128 colors on both passes', () => {
   const args = gif.argumentsFor('input.mp4', 'output.gif');
   const palette = gif.paletteArguments('input.mp4');
   const filter = "fps=10,scale=w='min(480,iw)':h=-1:flags=lanczos";
@@ -26,11 +26,21 @@ test('the single slim preset uses 10 fps / max 480 px / 128 colors on both passe
   assert.doesNotMatch(args.join(' '), /sierra2_4a/);
 });
 
-test('obsolete sampling arguments are ignored: there is only one GIF recipe', () => {
-  const baseline = gif.argumentsFor('a.mp4', 'b.gif');
-  for (const value of [15, 'source', 30]) {
-    assert.deepEqual(gif.argumentsFor('a.mp4', 'b.gif', value), baseline);
-    assert.deepEqual(gif.paletteArguments('a.mp4', value), gif.paletteArguments('a.mp4'));
+test('source GIF preserves dimensions and frame timing with a full palette', () => {
+  const args = gif.argumentsFor('a.mp4', 'b.gif', 'source');
+  const palette = gif.paletteArguments('a.mp4', 'source');
+  assert.equal(palette[palette.indexOf('-vf') + 1], 'palettegen=stats_mode=full');
+  assert.equal(args[args.indexOf('-lavfi') + 1], '[0:v:0][1:v:0]paletteuse=dither=sierra2_4a');
+  assert.doesNotMatch([...palette, ...args].join(' '), /fps=|scale=|setpts=|-r /);
+  assert.equal(args[args.indexOf('-fps_mode') + 1], 'passthrough');
+  assert.ok(args.includes('-an'));
+  assert.equal(args[args.indexOf('-loop') + 1], '0');
+});
+
+test('unknown GIF modes are rejected', () => {
+  for (const mode of [15, 'fast', null]) {
+    assert.throws(() => gif.argumentsFor('a.mp4', 'b.gif', mode), /模式/);
+    assert.throws(() => gif.paletteArguments('a.mp4', mode), /模式/);
   }
 });
 test('GIF probe handles rational frame rates and rejects broken probe data', () => {

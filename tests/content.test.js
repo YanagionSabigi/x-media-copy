@@ -59,6 +59,7 @@ test('GIF button copies text, likes the post and downloads one slim GIF', async 
     const requests = calls.filter(request => request.type === 'downloadMedia');
     assert.equal(requests.length, 1);
     assert.equal(requests[0].format, 'gif');
+    assert.equal(requests[0].gifMode, 'slim');
     assert.equal('gifFps' in requests[0], false);
     assert.equal(requests[0].postId, '1');
     assert.equal(requests[0].media.length, 1);
@@ -68,17 +69,55 @@ test('GIF button copies text, likes the post and downloads one slim GIF', async 
     assert.match(setup.writes[0].html, /译文<br><br><a /);
     assert.doesNotMatch(setup.writes[0].html, /<img/);
     assert.equal(button.disabled, false);
-    // Alt no longer selects a different recipe; a second click only reports already-liked.
+    // Alt selects the source recipe, preserving translation and the existing like.
     button.dispatchEvent(new setup.dom.window.MouseEvent('click', { altKey: true, bubbles: true })); await tick(20);
     const repeats = calls.filter(request => request.type === 'downloadMedia');
     assert.equal(repeats.length, 2);
     assert.equal('gifFps' in repeats.at(-1), false);
+    assert.equal(repeats.at(-1).gifMode, 'source');
     assert.equal(setup.writes.length, 2); assert.equal(setup.likes.length, 1);
     assert.deepEqual(setup.writes[1], setup.writes[0]);
     setup.document.querySelector('.x-copy-post-button').click(); await tick(20);
     assert.equal(calls.filter(request => request.type === 'downloadMedia').at(-1).format, undefined);
     assert.equal(setup.writes.length, 3);
     assert.equal(setup.writes[2].plain, 'Original\n\n译文\nhttps://x.com/a/status/1');
+  } finally { setup.dom.window.close(); }
+});
+
+test('GIF copy still likes when download submission fails', async () => {
+  const setup = fixture(`<article><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, {
+    media: true, message: () => { throw new Error('下载任务过多，请等待现有任务结束'); }
+  });
+  try {
+    setup.document.querySelector('.x-copy-gif-button').click(); await tick(20);
+    assert.equal(setup.writes.length, 1);
+    assert.equal(setup.likes.length, 1);
+    assert.match(setup.document.querySelector('.x-copy-toast-error').textContent, /已点赞.*下载任务过多/);
+    assert.equal(setup.document.querySelector('.x-copy-gif-button').disabled, false);
+  } finally { setup.dom.window.close(); }
+});
+
+test('GIF copy likes before slow media resolution and keeps downloading after switching windows', async () => {
+  let resolveMedia;
+  const calls = [];
+  const setup = fixture(`<article><video poster="https://pbs.twimg.com/ext_tw_video_thumb/11/a.jpg"></video>${link(1)}${bar}</article>`, {
+    media: true, message: request => {
+      calls.push(request);
+      if (request.type === 'resolveMedia') return new Promise(resolve => { resolveMedia = resolve; });
+      return [{ status: 'queued' }];
+    }
+  });
+  try {
+    setup.document.querySelector('.x-copy-gif-button').click(); await tick(20);
+    assert.equal(setup.writes.length, 1);
+    assert.equal(setup.likes.length, 1);
+    assert.match(setup.document.querySelector('.x-copy-toast').textContent, /已复制.*可粘贴/);
+    setup.visibility(true);
+    resolveMedia([{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }]);
+    await tick(20);
+    assert.equal(calls.filter(request => request.type === 'downloadMedia').length, 1);
+    assert.equal(setup.likes.length, 1);
+    assert.equal(setup.document.querySelector('.x-copy-gif-button').disabled, false);
   } finally { setup.dom.window.close(); }
 });
 

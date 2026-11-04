@@ -29,7 +29,7 @@
       for (const job of jobs.slice().reverse()) {
         const format = job.format || (job.type === 'animated_gif' ? 'gif' : 'mp4');
         const row = document.createElement('div'); row.className = 'job';
-        const heading = document.createElement('p'); heading.textContent = `${format === 'gif' ? '瘦身 GIF（10 fps / 480 px / 128 色）' : '视频'} · ${job.postId} · ${labels[job.status] || job.status}`;
+        const heading = document.createElement('p'); heading.textContent = `${format === 'gif' ? (job.gifMode === 'source' ? '源视频 GIF（源帧率 / 原尺寸）' : '瘦身 GIF（10 fps / 480 px / 128 色）') : '视频'} · ${job.postId} · ${labels[job.status] || job.status}`;
         row.append(heading);
         if (job.stage) { const stage = document.createElement('small'); stage.textContent = job.stage; row.append(stage); }
         if (job.error) { const error = document.createElement('p'); error.className = 'error'; error.textContent = job.error; row.append(error); }

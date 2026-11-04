@@ -19,7 +19,7 @@ function setup(options = {}) {
 const page = { id: 'extension', tab: { id: 7 }, url: 'https://x.com/home' };
 const popup = { id: 'extension', url: 'chrome-extension://extension/popup.html' };
 
-test('the single slim GIF recipe serializes conversions and deduplicates identical requests', async () => {
+test('the default slim GIF recipe serializes conversions and deduplicates identical requests', async () => {
   const conversions = []; let active = 0, peak = 0;
   const { service } = setup({ convert: async message => {
     if (message.type !== 'convertGif') return { ok: true };
@@ -41,6 +41,29 @@ test('the single slim GIF recipe serializes conversions and deduplicates identic
   await service.handle({ type: 'retryJob', jobId: first.id }, popup);
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(conversions.length, 3);
+});
+
+test('source and slim GIF jobs deduplicate independently and retry with their own mode', async () => {
+  const conversions = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const { service } = setup({ convert: async message => {
+    if (message.type === 'convertGif') { conversions.push(message); await gate; throw new Error('conversion failed'); }
+    return { ok: true };
+  } });
+  const request = { type: 'downloadMedia', format: 'gif', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] };
+  const [slim] = await service.handle(request, page);
+  const [source] = await service.handle({ ...request, gifMode: 'source' }, page);
+  const [duplicate] = await service.handle({ ...request, gifMode: 'source' }, page);
+  assert.notEqual(slim.id, source.id);
+  assert.equal(duplicate.id, source.id);
+  release();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(conversions.map(message => message.gifMode), ['slim', 'source']);
+  await service.handle({ type: 'retryJob', jobId: source.id }, popup);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(conversions.at(-1).gifMode, 'source');
+  await assert.rejects(service.handle({ ...request, gifMode: 'fast' }, page), /模式/);
 });
 
 test('obsolete sampling fields are ignored instead of creating extra GIF jobs', async () => {

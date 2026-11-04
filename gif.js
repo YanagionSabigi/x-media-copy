@@ -1,6 +1,6 @@
 (function (root) {
   'use strict';
-  // One fixed, deliberately lossy preset for chats: 10 fps / max 480 px wide / 128 colors.
+  // Default chat preset; source mode preserves dimensions and frame timing.
   // Two streaming passes do not retain every decoded frame in memory.
   // Bound individual frames instead of rejecting cumulative pixel workloads.
   const limits = Object.freeze({ input: 128 * 1024 ** 2, output: 256 * 1024 ** 2, seconds: 60, framePixels: 3840 * 2160, timeout: 600000 });
@@ -24,14 +24,21 @@
     // Only shrink; narrower sources keep their original width.
     return `fps=${preset.fps},scale=w='min(${preset.maxWidth},iw)':h=-1:flags=lanczos`;
   }
-  function argumentsFor(input, output) {
+  function checkMode(mode) {
+    if (!['slim', 'source'].includes(mode)) throw new Error('GIF 模式无效');
+  }
+  function argumentsFor(input, output, mode = 'slim') {
+    checkMode(mode);
+    if (mode === 'source') return ['-i', input, '-i', 'palette.png', '-lavfi', '[0:v:0][1:v:0]paletteuse=dither=sierra2_4a',
+      '-an', '-fps_mode', 'passthrough', '-loop', '0', '-fs', String(limits.output), output];
     // Stable ordered dithering + rectangle diff keep the LZW input small.
     const graph = `[0:v:0]${samplingFilter()}[sampled];[sampled][1:v:0]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`;
     return ['-i', input, '-i', 'palette.png', '-lavfi', graph, '-an', '-fps_mode', 'passthrough',
       '-gifflags', '+offsetting+transdiff', '-loop', '0', '-fs', String(limits.output), output];
   }
-  function paletteArguments(input) {
-    return ['-i', input, '-vf', samplingFilter() + `,palettegen=stats_mode=full:max_colors=${preset.colors}`,
+  function paletteArguments(input, mode = 'slim') {
+    checkMode(mode);
+    return ['-i', input, '-vf', mode === 'source' ? 'palettegen=stats_mode=full' : samplingFilter() + `,palettegen=stats_mode=full:max_colors=${preset.colors}`,
       '-frames:v', '1', '-update', '1', 'palette.png'];
   }
   function parseProbeOutput(code, text) {

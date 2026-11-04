@@ -6,6 +6,7 @@ if (typeof importScripts === 'function') importScripts('media.js');
   const ACTIVE = new Set(['queued', 'converting', 'downloading']);
   const CAT_IDS = ['jfedfbgedapdagkghmgibemcoggfppbb', 'oohmdefbjalncfplafanlagojlakmjci'];
   const formatFor = job => job.format || (job.type === 'animated_gif' ? 'gif' : 'mp4');
+  const gifModeFor = job => job.gifMode === 'source' ? 'source' : 'slim';
   function createService(api, dependencies = {}) {
     const request = dependencies.fetch || fetch;
     const now = dependencies.now || Date.now;
@@ -321,11 +322,12 @@ if (typeof importScripts === 'function') importScripts('media.js');
     function schedule(job) {
       const generation = job.generation || 0;
       const format = formatFor(job);
-      const run = () => runJob(job, format, generation);
+      const gifMode = gifModeFor(job);
+      const run = () => runJob(job, format, generation, gifMode);
       if (format === 'gif') gifQueue = gifQueue.then(run).catch(() => {});
       else void run();
     }
-    async function runJob(job, format, generation) {
+    async function runJob(job, format, generation, gifMode) {
       const current = () => (job.generation || 0) === generation && job.status !== 'cancelled';
       if (!current()) return;
       let blobUrl;
@@ -334,7 +336,7 @@ if (typeof importScripts === 'function') importScripts('media.js');
         if (format === 'gif') {
           job.status = 'converting'; job.stage = '读取并转换 GIF'; await save(job);
           if (!current()) return;
-          const result = await offscreen({ type: 'convertGif', jobId: job.id, conversionId: `${job.id}:${generation}`, url: job.url });
+          const result = await offscreen({ type: 'convertGif', jobId: job.id, conversionId: `${job.id}:${generation}`, url: job.url, gifMode });
           blobUrl = result.url;
           if (!blobUrl?.startsWith(`blob:chrome-extension://${api.runtime.id}/`)) throw new Error('转换器返回了无效文件');
           url = blobUrl;
@@ -393,16 +395,18 @@ if (typeof importScripts === 'function') importScripts('media.js');
       if (message.type === 'downloadMedia' && kind === 'page') {
         if (!/^\d{1,30}$/.test(message.postId) || !Array.isArray(message.media) || message.media.length > 16) throw new Error('帖子或媒体列表无效');
         if (message.format !== undefined && !['gif', 'mp4'].includes(message.format)) throw new Error('下载格式无效');
+        if (message.gifMode !== undefined && !['slim', 'source'].includes(message.gifMode)) throw new Error('GIF 模式无效');
         const selected = message.media.map(media.normalizeMedia).filter(item => item && item.type !== 'photo');
         const added = [];
         for (const [index, item] of selected.entries()) {
           const format = message.format || formatFor(item);
-          // There is exactly one GIF recipe now, so format alone identifies a duplicate.
-          const existing = jobs.find(job => job.postId === message.postId && job.tabId === sender.tab.id && job.type === item.type && job.url === item.url && formatFor(job) === format && ACTIVE.has(job.status));
+          const gifMode = gifModeFor(message);
+          const existing = jobs.find(job => job.postId === message.postId && job.tabId === sender.tab.id && job.type === item.type && job.url === item.url && formatFor(job) === format && (format !== 'gif' || gifModeFor(job) === gifMode) && ACTIVE.has(job.status));
           if (existing) { added.push({ ...existing }); continue; }
           jobs = jobs.filter(job => ACTIVE.has(job.status) || jobs.indexOf(job) >= jobs.length - 60);
           if (jobs.length >= 100) throw new Error('下载任务过多，请等待现有任务结束');
           const job = { id: crypto.randomUUID(), postId: message.postId, tabId: sender.tab.id, type: item.type, format, url: item.url, index,
+            ...(format === 'gif' ? { gifMode } : {}),
             status: item.url ? 'queued' : 'failed', error: item.url ? '' : '尚未取得该帖完整 MP4；请播放媒体后重试，或使用猫抓处理 HLS', createdAt: Date.now() };
           jobs.push(job); added.push({ ...job });
           await save(job);

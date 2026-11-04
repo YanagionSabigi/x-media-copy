@@ -38,7 +38,7 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       const {FFmpeg}=await import('./vendor/ffmpeg/index.js');
       const encoder=new FFmpeg();
       await encoder.load({classWorkerURL:chrome.runtime.getURL('vendor/ffmpeg/worker.js'),coreURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.js'),wasmURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.wasm')});
-      const code=await encoder.exec(['-f','lavfi','-i','testsrc=size=96x64:rate=10:duration=0.6','-c:v','mpeg4','sample.mp4']);
+      const code=await encoder.exec(['-f','lavfi','-i','testsrc=size=96x64:rate=30:duration=0.6','-c:v','mpeg4','sample.mp4']);
       if(code)throw new Error('Fixture video encode failed');
       const bytes=await encoder.readFile('sample.mp4');encoder.terminate();
       const sourceBase64=btoa(String.fromCharCode(...bytes));
@@ -73,7 +73,9 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
           if(converted.frames!==10)throw new Error('Slim preset did not sample to 10 frames at '+rate+': '+converted.frames);
           if(Math.abs(converted.duration-Number(input.duration))>0.08)throw new Error('Slim preset changed playback speed at '+rate);
           if(converted.width!==96||converted.height!==64)throw new Error('Small source was resized');
-          results.push({rate,sourceFrames:Number(input.nb_frames),frames:converted.frames,sourceDuration:Number(input.duration),duration:converted.duration,bytes:converted.size,audio:false});
+          const original=await convertGif({jobId:'qa-source-rate-'+rate,gifMode:'source',testBytes:await encoder.readFile('sample.mp4')});
+          if(original.frames!==Number(input.nb_frames)||original.width!==96||original.height!==64||Math.abs(original.duration-Number(input.duration))>0.08)throw new Error('Source mode changed frames, duration or dimensions: '+JSON.stringify(original));
+          results.push({rate,sourceFrames:Number(input.nb_frames),frames:converted.frames,sourceModeFrames:original.frames,sourceModeDuration:original.duration,sourceDuration:Number(input.duration),duration:converted.duration,bytes:converted.size,audio:false});
         } finally {encoder.terminate();}
       }
       return results;
@@ -95,6 +97,10 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
           const actual=JSON.parse(await encoder.readFile('resized.json','utf8')).streams[0];
           if(actual.width!==expectedWidth||actual.height!==expectedHeight||slim.width!==actual.width||slim.height!==actual.height)throw new Error('Slim size/report mismatch: '+JSON.stringify({width,height,slim,actual}));
           if(slim.frames!==10||Math.abs(slim.duration-1)>0.08)throw new Error('Sampling changed frame count or duration');
+          if(width===640){
+            const original=await convertGif({jobId:'qa-source-size',gifMode:'source',testBytes:await encoder.readFile('sample.mp4')});
+            if(original.width!==640||original.height!==360||original.frames!==30||Math.abs(original.duration-1)>0.08)throw new Error('Source mode resized or resampled a larger input: '+JSON.stringify(original));
+          }
           results.push({input:[width,height],slim:[slim.width,slim.height],frames:slim.frames,bytes:slim.size});
         } finally {encoder.terminate();}
       }
@@ -279,7 +285,7 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
         const response = await evaluate('chrome.runtime.sendMessage({type:"getJobs"})');
         const selected = response.data.filter(job => job.postId === '303');
         if (selected.some(job => job.status === 'failed')) throw new Error('Video GIF download failed: '+JSON.stringify(selected));
-        if (selected.length > 1 || selected.some(job => job.format !== 'gif' || 'gifFps' in job)) throw new Error('GIF action started extra downloads or an obsolete sampling mode');
+        if (selected.length > 1 || selected.some(job => job.format !== 'gif' || job.gifMode !== 'slim')) throw new Error('GIF action started extra downloads or used the wrong mode');
         return selected[0]?.status === 'complete' ? selected[0] : null;
       }, 30000);
       if (!(await evaluateOn(fixture, '!!document.querySelector("#video [data-testid=unlike]")'))) throw new Error('GIF action did not like the post');
@@ -293,13 +299,27 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       if (buttonLayout.width < 44 || buttonLayout.width > 90 || buttonLayout.height !== 26 || !buttonLayout.ordered || !buttonLayout.rightmost) throw new Error('GIF pill layout invalid: '+JSON.stringify(buttonLayout));
       const gifShot = await fixture.call('Page.captureScreenshot', { format: 'png' });
       await fs.writeFile(path.join(directory, 'video-gif.png'), Buffer.from(gifShot.data,'base64'));
-      // Alt no longer selects a second mode; a repeat click may queue another
-      // download once the first job completed, but never an obsolete source job.
+      // Alt creates an independent source-mode job while retaining the same text.
       await evaluateOn(fixture, 'document.querySelector("#video .x-copy-gif-button").dispatchEvent(new MouseEvent("click",{altKey:true,bubbles:true}))');
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      const allJobs = (await evaluate('chrome.runtime.sendMessage({type:"getJobs"})')).data;
-      const altJobs = allJobs.filter(job => job.postId === '303' && job.format === 'gif');
-      if (!altJobs.length || altJobs.some(job => 'gifFps' in job) || allJobs.some(job => job.gifFps === 'source')) throw new Error('Alt click created an obsolete sampling mode');
+      const sourceGif = await waitFor(async () => {
+        const allJobs = (await evaluate('chrome.runtime.sendMessage({type:"getJobs"})')).data;
+        const job = allJobs.find(job => job.postId === '303' && job.format === 'gif' && job.gifMode === 'source');
+        if(job?.status === 'failed')throw new Error('Source GIF failed: '+JSON.stringify(job));
+        return job?.status === 'complete' ? job : null;
+      }, 30000);
+      if(sourceGif.id===videoGif.id)throw new Error('Source mode reused the slim task');
+      const [sourceDownload] = await evaluateOn(swTab, `chrome.downloads.search({id:${sourceGif.downloadId}})`);
+      const sourceBytes = await fs.readFile(sourceDownload.filename);
+      const sourceMetadata = await evaluateOn(off, `(async()=>{
+        const {FFmpeg}=await import('./vendor/ffmpeg/index.js');const encoder=new FFmpeg();
+        try{
+          await encoder.load({classWorkerURL:chrome.runtime.getURL('vendor/ffmpeg/worker.js'),coreURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.js'),wasmURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.wasm')});
+          await encoder.writeFile('download.gif',Uint8Array.from(atob(${JSON.stringify(sourceBytes.toString('base64'))}),c=>c.charCodeAt(0)));
+          await encoder.ffprobe(['-v','error','-min_delay','0','-show_streams','-of','json','-o','probe.json','download.gif']);
+          return JSON.parse(await encoder.readFile('probe.json','utf8')).streams[0];
+        }finally{encoder.terminate();}
+      })()`);
+      if(Number(sourceMetadata.nb_frames)!==18||sourceMetadata.width!==96||sourceMetadata.height!==64||Math.abs(Number(sourceMetadata.duration)-0.6)>0.08)throw new Error('Alt source mode changed the downloaded video cadence: '+JSON.stringify(sourceMetadata));
       const altGifClipboard = await evaluateOn(fixture, readGifClipboard);
       if (JSON.stringify(altGifClipboard) !== JSON.stringify(gifClipboard)) throw new Error('Alt GIF changed the clipboard layout');
       await evaluateOn(fixture, 'document.querySelector("#video .x-copy-post-button").click()');
@@ -315,7 +335,7 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       // Assert the original URL reaches Chrome, rather than requiring the
       // synthetic X URL to exist on the public server.
       if (mp4Download.url !== 'https://video.twimg.com/ext_tw_video/303/a.mp4' || !mp4Download.filename.endsWith('.mp4')) throw new Error('Original MP4 download routing changed');
-      const evidence = { capturedIds, focusFailure, clipboard, originalOnly, mergedCopy, mergedOriginal, jobs, videoGif, gifClipboard, altGifClipboard, videoMp4, ordinaryVideoCopy, download: { bytes: saved.length, filename: downloaded[0].filename }, originalRequests: seen.filter(url => url.includes('name=orig')) };
+      const evidence = { capturedIds, focusFailure, clipboard, originalOnly, mergedCopy, mergedOriginal, jobs, videoGif, sourceGif, gifClipboard, altGifClipboard, videoMp4, ordinaryVideoCopy, download: { bytes: saved.length, filename: downloaded[0].filename }, originalRequests: seen.filter(url => url.includes('name=orig')) };
       console.log(JSON.stringify({ e2e: evidence })); await fs.writeFile(path.join(directory, 'evidence.json'), JSON.stringify(evidence,null,2));
       const screenshot = await fixture.call('Page.captureScreenshot', { format: 'png' }); await fs.writeFile(path.join(directory, 'fixture.png'), Buffer.from(screenshot.data,'base64'));
       const popupTarget = await control.call('Target.createTarget', { url: `chrome-extension://${extensionId}/popup.html` });

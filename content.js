@@ -395,10 +395,12 @@
     finally { discardImageRead(imageRead); button.disabled = false; button.removeAttribute("aria-busy"); button.setAttribute("aria-label", "复制贴文和出处链接，并自动点赞"); }
   }
   function convertible(item) { return item.type === 'video' || item.type === 'animated_gif'; }
-  async function handleGif(article, button) {
+  async function handleGif(article, button, sourceMode = false) {
     if (copying || button.disabled) { toast('正在复制，请稍候'); return; }
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
+    const gifMode = sourceMode ? 'source' : 'slim';
+    const gifLabel = sourceMode ? '源视频 GIF' : '瘦身 GIF';
     let copied = false;
     try {
       await runCopy(async () => {
@@ -419,12 +421,16 @@
         await clipboard.writeText({ ...texts, postUrl, reserveGifLine: true });
         assertPage(epoch);
         copied = true;
-        toast('已复制，可粘贴；正在提交瘦身 GIF 下载');
+        toast(`已复制，可粘贴；正在提交${gifLabel}下载`);
         // Preserve the source snapshot once copying succeeds, including when
         // the page is hidden while resolving its original MP4 address.
-        if (media.some(item => !item.url)) media = await send({ type: 'resolveMedia', media });
-        const jobs = await send({ type: 'downloadMedia', format: 'gif', postId: postUrl.match(/\/status\/(\d+)/)?.[1], media });
-        const failed = jobs.filter(job => job.status === 'failed');
+        const downloadPromise = (async () => {
+          if (media.some(item => !item.url)) media = await send({ type: 'resolveMedia', media });
+          return send({ type: 'downloadMedia', format: 'gif', gifMode, postId: postUrl.match(/\/status\/(\d+)/)?.[1], media });
+        })();
+        // Copying succeeded: do not delay the like until media resolution ends.
+        // Observe early download failures while the liked state is being confirmed.
+        downloadPromise.catch(() => {});
         let status;
         try { status = await autoLike(postUrl, epoch); }
         catch (error) { if (contextError(error)) throw error; status = 'unconfirmed'; }
@@ -432,8 +438,15 @@
           liked: '已点赞', 'already-liked': '该帖已点赞',
           unavailable: '未找到可用的点赞按钮', unconfirmed: '未能确认点赞，请检查页面'
         }[status];
-        const message = `已复制贴文、译文和出处链接（${likeText}）；${failed.length ? failed.map(job => job.error).join('；') : `已提交 ${jobs.length} 个瘦身 GIF 下载任务，可在扩展图标中查看或取消`}`;
-        toast(message, failed.length > 0 || ['unavailable', 'unconfirmed'].includes(status));
+        const message = `已复制贴文、译文和出处链接（${likeText}）`;
+        try {
+          const jobs = await downloadPromise;
+          const failed = jobs.filter(job => job.status === 'failed');
+          toast(`${message}；${failed.length ? failed.map(job => job.error).join('；') : `已提交 ${jobs.length} 个${gifLabel}下载任务，可在扩展图标中查看或取消`}`, failed.length > 0 || ['unavailable', 'unconfirmed'].includes(status));
+        } catch (error) {
+          if (contextError(error)) throw error;
+          toast(`${message}；GIF 下载未启动：${error.message}`, true);
+        }
       });
     } catch (error) {
       if (copied && !contextError(error)) toast(`已复制，可粘贴；GIF 下载未启动：${error.message}`, true);
@@ -459,10 +472,10 @@
       const label = document.createElement('span');
       label.textContent = 'GIF';
       button.append(svg, label);
-      button.setAttribute('aria-label', '复制贴文、译文和出处链接并自动点赞；制作 10 fps / 最宽 480 px / 128 色的瘦身 GIF 并下载');
-      button.title = '制作瘦身 GIF：10 fps、宽度最多 480 px、128 色；复制贴文并自动点赞';
+      button.setAttribute('aria-label', '复制贴文、译文和出处链接并自动点赞；点击制作瘦身 GIF，Alt+点击保留源帧率和原尺寸制作 GIF');
+      button.title = '点击：瘦身 GIF（10 fps / 最宽 480 px / 128 色）；Alt+点击：源视频 GIF（源帧率 / 原尺寸）；均复制贴文和译文并自动点赞';
       button.addEventListener('click', event => {
-        event.preventDefault(); event.stopPropagation(); void handleGif(article, button);
+        event.preventDefault(); event.stopPropagation(); void handleGif(article, button, event.altKey);
       });
     }
     const copy = [...group.children].find(node => node.classList.contains('x-copy-post-button'));
