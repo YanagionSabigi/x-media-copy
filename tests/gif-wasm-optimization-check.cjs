@@ -1,3 +1,6 @@
+// HISTORICAL (v1.1.6): reproduces the old 10 fps / 800 px / 256-color output.
+// The current single slim preset no longer accepts gifFps; do not use this
+// harness to validate 1.2.0+ builds. Kept only for the earlier report.
 // Reproduce a reported local video with the exact bundled browser encoder.
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');

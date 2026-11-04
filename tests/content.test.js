@@ -46,29 +46,34 @@ const tick = ms => new Promise(resolve => setTimeout(resolve, ms));
 const photoPost = (id, extra = '') => `<article><img src="https://pbs.twimg.com/media/P${id}.jpg">${extra}${link(id)}${bar}</article>`;
 const imageResult = request => request.urls.map(url => ({ url, dataUrl: 'data:image/jpeg;base64,AAAA' }));
 
-test('both GIF modes copy original and translation with an insertion line, then download only GIF', async () => {
+test('GIF button copies text, likes the post and downloads one slim GIF', async () => {
   const calls = [];
-  const setup = fixture(`<article><div data-testid="tweetText">Original #art</div><div data-testid="tweetText">译文 #艺术</div><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video><video poster="https://pbs.twimg.com/tweet_video_thumb/ABC.jpg"></video>${link(1)}${bar}</article>`, { media: true, message: request => { assert.ok(setup.writes.length > 0); calls.push(request); return [{ status: 'queued' }]; } });
+  const setup = fixture(`<article><div data-testid="tweetText">Original #art</div><div data-testid="tweetText">译文 #艺术</div><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, { media: true, message: request => { assert.ok(setup.writes.length > 0); calls.push(request); return [{ status: 'queued' }]; } });
   try {
     const button = setup.document.querySelector('.x-copy-gif-button');
     assert.ok(button);
+    assert.ok(button.querySelector('svg'));
+    assert.equal(button.querySelector('span').textContent, 'GIF');
     assert.equal(setup.document.querySelector('.actions').lastElementChild.className, 'x-copy-post-button');
     button.click(); await tick(20);
     const requests = calls.filter(request => request.type === 'downloadMedia');
     assert.equal(requests.length, 1);
     assert.equal(requests[0].format, 'gif');
-    assert.equal(requests[0].gifFps, 10);
+    assert.equal('gifFps' in requests[0], false);
     assert.equal(requests[0].postId, '1');
     assert.equal(requests[0].media.length, 1);
     assert.equal(requests[0].media[0].type, 'video');
-    assert.equal(setup.writes.length, 1); assert.equal(setup.likes.length, 0);
+    assert.equal(setup.writes.length, 1); assert.equal(setup.likes.length, 1);
     assert.equal(setup.writes[0].plain, 'Original\n\n译文\n\nhttps://x.com/a/status/1');
     assert.match(setup.writes[0].html, /译文<br><br><a /);
     assert.doesNotMatch(setup.writes[0].html, /<img/);
     assert.equal(button.disabled, false);
+    // Alt no longer selects a different recipe; a second click only reports already-liked.
     button.dispatchEvent(new setup.dom.window.MouseEvent('click', { altKey: true, bubbles: true })); await tick(20);
-    assert.equal(calls.filter(request => request.type === 'downloadMedia').at(-1).gifFps, 'source');
-    assert.equal(setup.writes.length, 2); assert.equal(setup.likes.length, 0);
+    const repeats = calls.filter(request => request.type === 'downloadMedia');
+    assert.equal(repeats.length, 2);
+    assert.equal('gifFps' in repeats.at(-1), false);
+    assert.equal(setup.writes.length, 2); assert.equal(setup.likes.length, 1);
     assert.deepEqual(setup.writes[1], setup.writes[0]);
     setup.document.querySelector('.x-copy-post-button').click(); await tick(20);
     assert.equal(calls.filter(request => request.type === 'downloadMedia').at(-1).format, undefined);
@@ -77,7 +82,25 @@ test('both GIF modes copy original and translation with an insertion line, then 
   } finally { setup.dom.window.close(); }
 });
 
-test('GIF copy focus failure does not submit a download in either mode', async () => {
+test('GIF button on an X animation submits an animated_gif job and likes the post', async () => {
+  const calls = [];
+  const setup = fixture(`<article><div data-testid="tweetText">Cat wave</div><video poster="https://pbs.twimg.com/tweet_video_thumb/ABC.jpg"></video>${link(9)}${bar}</article>`, { media: true, message: request => { calls.push(request); return [{ status: 'queued' }]; } });
+  try {
+    const button = setup.document.querySelector('.x-copy-gif-button');
+    assert.ok(button);
+    button.click(); await tick(20);
+    const requests = calls.filter(request => request.type === 'downloadMedia');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].format, 'gif');
+    assert.equal(requests[0].media.length, 1);
+    assert.equal(requests[0].media[0].type, 'animated_gif');
+    assert.equal(requests[0].media[0].url, 'https://video.twimg.com/tweet_video/ABC.mp4');
+    assert.equal(setup.writes.length, 1);
+    assert.equal(setup.likes.length, 1);
+  } finally { setup.dom.window.close(); }
+});
+
+test('GIF copy focus failure does not submit a download or like, with or without Alt', async () => {
   for (const altKey of [false, true]) {
     const calls = [];
     const setup = fixture(`<article><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, { media: true, beforeWrite: async () => { throw new Error('Document is not focused'); }, message: request => { calls.push(request); return []; } });
@@ -144,15 +167,15 @@ test('GIF action resolves unloaded videos and reports failed jobs', async () => 
   } finally { setup.dom.window.close(); }
 });
 
-test('GIF action follows recycled articles and excludes photos, X animations and quoted videos', async () => {
+test('GIF button covers videos and X animations, follows recycled articles, and excludes photos and quoted videos', async () => {
   const setup = fixture(`<article><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>` + photoPost(2) + `<article><video poster="https://pbs.twimg.com/tweet_video_thumb/ABC.jpg"></video>${link(3)}${bar}</article>` + `<article><div data-testid="quoteTweet"><video></video></div>${link(4)}${bar}</article>`, { media: true });
   try {
-    assert.equal(setup.document.querySelectorAll('.x-copy-gif-button').length, 1);
+    assert.equal(setup.document.querySelectorAll('.x-copy-gif-button').length, 2);
     const article = setup.document.querySelector('article');
     article.querySelector('video').remove();
     article.querySelector('a').href = 'https://x.com/a/status/5';
     await tick(650);
-    assert.equal(setup.document.querySelectorAll('.x-copy-gif-button').length, 0);
+    assert.equal(setup.document.querySelectorAll('.x-copy-gif-button').length, 1);
     article.insertAdjacentHTML('afterbegin', '<video></video>'); await tick(650);
     assert.equal(article.querySelectorAll('.x-copy-gif-button').length, 1);
     assert.equal(article.querySelector('.actions').lastElementChild.className, 'x-copy-post-button');

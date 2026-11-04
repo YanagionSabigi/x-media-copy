@@ -70,13 +70,10 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
           await encoder.ffprobe(['-v','error','-min_delay','0','-show_streams','-of','json','-o','result.json','result.gif']);
           const output=JSON.parse(await encoder.readFile('result.json','utf8'));
           if(output.streams.length!==1||output.streams[0].codec_type!=='video')throw new Error('GIF contains unexpected stream');
-          if(converted.frames!==Number(input.nb_frames))throw new Error('GIF frame loss at '+rate+': '+converted.frames+'/'+input.nb_frames);
-          if(Math.abs(converted.duration-Number(input.duration))>0.03)throw new Error('GIF playback speed changed at '+rate);
-          if(converted.width!==96||converted.height!==64)throw new Error('GIF dimensions changed');
-          const sampled=await convertGif({jobId:'qa-sampled-'+rate,gifFps:10,testBytes:await encoder.readFile('sample.mp4')});
-          if(sampled.frames!==10||Math.abs(sampled.duration-Number(input.duration))>0.08)throw new Error('10 fps sampling changed duration or frame count at '+rate+': '+JSON.stringify(sampled));
-          if(sampled.width!==96||sampled.height!==64)throw new Error('Sampling changed dimensions');
-          results.push({rate,sourceFrames:Number(input.nb_frames),frames:converted.frames,sourceDuration:Number(input.duration),duration:converted.duration,sampledFrames:sampled.frames,sampledDuration:sampled.duration,audio:false});
+          if(converted.frames!==10)throw new Error('Slim preset did not sample to 10 frames at '+rate+': '+converted.frames);
+          if(Math.abs(converted.duration-Number(input.duration))>0.08)throw new Error('Slim preset changed playback speed at '+rate);
+          if(converted.width!==96||converted.height!==64)throw new Error('Small source was resized');
+          results.push({rate,sourceFrames:Number(input.nb_frames),frames:converted.frames,sourceDuration:Number(input.duration),duration:converted.duration,bytes:converted.size,audio:false});
         } finally {encoder.terminate();}
       }
       return results;
@@ -86,28 +83,26 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       const {FFmpeg}=await import('./vendor/ffmpeg/index.js');
       const {convertGif}=await import('./offscreen.js');
       const results=[];
-      for(const [width,height,expectedWidth,expectedHeight] of [[1280,720,800,450],[960,1280,800,1067],[640,360,640,360]]) {
+      for(const [width,height,expectedWidth,expectedHeight] of [[1280,720,480,270],[960,1280,480,640],[640,360,480,270],[320,200,320,200]]) {
         const encoder=new FFmpeg();
         try {
           await encoder.load({classWorkerURL:chrome.runtime.getURL('vendor/ffmpeg/worker.js'),coreURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.js'),wasmURL:chrome.runtime.getURL('vendor/core/ffmpeg-core.wasm')});
           const code=await encoder.exec(['-f','lavfi','-i','testsrc2=size='+width+'x'+height+':rate=30:duration=1','-c:v','mpeg4','sample.mp4']);
           if(code)throw new Error('Size fixture encode failed');
-          const sampled=await convertGif({jobId:'qa-size-'+width,gifFps:10,testBytes:await encoder.readFile('sample.mp4')});
-          await encoder.writeFile('resized.gif',new Uint8Array(await(await fetch(sampled.url)).arrayBuffer()));
+          const slim=await convertGif({jobId:'qa-size-'+width,testBytes:await encoder.readFile('sample.mp4')});
+          await encoder.writeFile('resized.gif',new Uint8Array(await(await fetch(slim.url)).arrayBuffer()));
           await encoder.ffprobe(['-v','error','-min_delay','0','-show_streams','-of','json','-o','resized.json','resized.gif']);
           const actual=JSON.parse(await encoder.readFile('resized.json','utf8')).streams[0];
-          if(actual.width!==expectedWidth||actual.height!==expectedHeight||sampled.width!==actual.width||sampled.height!==actual.height)throw new Error('Sample size/report mismatch: '+JSON.stringify({width,height,sampled,actual}));
-          if(sampled.frames!==10||Math.abs(sampled.duration-1)>0.08)throw new Error('Resizing changed frame count or duration');
-          const source=await convertGif({jobId:'qa-original-size-'+width,gifFps:'source',testBytes:await encoder.readFile('sample.mp4')});
-          if(source.width!==width||source.height!==height||source.frames!==30)throw new Error('Source mode resized or dropped frames');
-          results.push({input:[width,height],sampled:[sampled.width,sampled.height],source:[source.width,source.height],frames:sampled.frames});
+          if(actual.width!==expectedWidth||actual.height!==expectedHeight||slim.width!==actual.width||slim.height!==actual.height)throw new Error('Slim size/report mismatch: '+JSON.stringify({width,height,slim,actual}));
+          if(slim.frames!==10||Math.abs(slim.duration-1)>0.08)throw new Error('Sampling changed frame count or duration');
+          results.push({input:[width,height],slim:[slim.width,slim.height],frames:slim.frames,bytes:slim.size});
         } finally {encoder.terminate();}
       }
       return results;
     })()`);
     console.log(JSON.stringify({ sizes }));
     if (process.argv.includes('--volume')) {
-      console.log('Measuring 10-second 1080p60 input at 10 fps and legacy 15 fps, both max-width 800');
+      console.log('Measuring 10-second 1080p60 input with the single slim preset');
       const volume = await evaluate(`(async()=>{
         const {FFmpeg}=await import('./vendor/ffmpeg/index.js');
         const {convertGif}=await import('./offscreen.js');
@@ -117,16 +112,12 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
           if(await encoder.exec(['-f','lavfi','-i','testsrc2=size=1920x1080:rate=60:duration=10','-c:v','mpeg4','-q:v','8','-an','sample.mp4'],60000))throw new Error('Volume fixture encode failed');
           bytes=await encoder.readFile('sample.mp4');
         } finally {encoder.terminate();}
-        const results=[];
-        for(const fps of [10,15]) {
-          const started=performance.now();
-          const result=await convertGif({jobId:'qa-volume-'+fps,gifFps:fps,testBytes:bytes.slice()});
-          if(result.frames!==fps*10||Math.abs(result.duration-10)>0.03||result.width!==800||result.height!==450)throw new Error('Volume conversion changed frames, duration or dimensions: '+JSON.stringify(result));
-          results.push({fps,width:result.width,height:result.height,frames:result.frames,duration:result.duration,bytes:result.size,seconds:(performance.now()-started)/1000});
-          URL.revokeObjectURL(result.url);
-        }
-        if(results[0].bytes>=results[1].bytes)throw new Error('10 fps did not reduce this fixture compared with 15 fps');
-        return {fixture:'10 second 1920x1080 60 fps testsrc2',inputBytes:bytes.length,results};
+        const started=performance.now();
+        const result=await convertGif({jobId:'qa-volume-slim',testBytes:bytes.slice()});
+        if(result.frames!==100||Math.abs(result.duration-10)>0.03||result.width!==480||result.height!==270)throw new Error('Slim conversion changed frames, duration or dimensions: '+JSON.stringify(result));
+        const slim={width:result.width,height:result.height,frames:result.frames,duration:result.duration,bytes:result.size,seconds:(performance.now()-started)/1000};
+        URL.revokeObjectURL(result.url);
+        return {fixture:'10 second 1920x1080 60 fps testsrc2',inputBytes:bytes.length,slim};
       })()`);
       console.log(JSON.stringify({ volume }));
       const volumeDir = path.join(root, 'test-results', 'gif-sampling'); await fs.mkdir(volumeDir, { recursive: true });
@@ -151,19 +142,13 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
           if(code)throw new Error('Stress fixture encoding failed');
           bytes=await encoder.readFile('sample.mp4');
         } finally {encoder.terminate();}
-        stressProgress('Converting full 1200 frames at source cadence; input bytes '+bytes.length);
+        stressProgress('Converting 20 s to the 10 fps / 480 px / 128 color preset; input bytes '+bytes.length);
         const conversionStarted=performance.now();
-        // FFmpeg transfers and detaches writeFile buffers; keep independent
-        // input bytes for the second conversion and evidence below.
-        const source=await convertGif({jobId:'qa-stress-source',testBytes:bytes.slice(),gifFps:'source'});
-        const sourceSeconds=(performance.now()-conversionStarted)/1000;
-        if(source.frames!==1200||Math.abs(source.duration-20)>0.03||source.width!==1920||source.height!==1080)throw new Error('Stress output changed frame count, duration or dimensions: '+JSON.stringify(source));
-        stressProgress('Source conversion complete in '+sourceSeconds.toFixed(1)+' seconds; output bytes '+source.size);
-        URL.revokeObjectURL(source.url);
-        const samplingStarted=performance.now();
-        const sampled=await convertGif({jobId:'qa-stress-10',testBytes:bytes.slice(),gifFps:10});
-        if(sampled.frames!==200||Math.abs(sampled.duration-20)>0.08||sampled.width!==800||sampled.height!==450)throw new Error('Stress sampled output changed duration or dimensions: '+JSON.stringify(sampled));
-        return {inputBytes:bytes.length,source:{frames:source.frames,duration:source.duration,bytes:source.size,seconds:sourceSeconds},sampled:{frames:sampled.frames,duration:sampled.duration,bytes:sampled.size,seconds:(performance.now()-samplingStarted)/1000},totalSeconds:(performance.now()-started)/1000};
+        const slim=await convertGif({jobId:'qa-stress-slim',testBytes:bytes.slice()});
+        if(slim.frames!==200||Math.abs(slim.duration-20)>0.08||slim.width!==480||slim.height!==270)throw new Error('Stress slim output changed duration or dimensions: '+JSON.stringify(slim));
+        stressProgress('Slim conversion complete; output bytes '+slim.size);
+        URL.revokeObjectURL(slim.url);
+        return {inputBytes:bytes.length,slim:{frames:slim.frames,duration:slim.duration,bytes:slim.size,seconds:(performance.now()-conversionStarted)/1000},totalSeconds:(performance.now()-started)/1000};
       })()`);
       console.log(JSON.stringify({ stress }));
       const evidenceDir = path.join(root, 'test-results', 'gif-sampling'); await fs.mkdir(evidenceDir, { recursive: true });
@@ -294,10 +279,10 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
         const response = await evaluate('chrome.runtime.sendMessage({type:"getJobs"})');
         const selected = response.data.filter(job => job.postId === '303');
         if (selected.some(job => job.status === 'failed')) throw new Error('Video GIF download failed: '+JSON.stringify(selected));
-        if (selected.length > 1 || selected.some(job => job.format !== 'gif' || job.gifFps !== 10)) throw new Error('GIF action started wrong sampling mode or extra downloads');
+        if (selected.length > 1 || selected.some(job => job.format !== 'gif' || 'gifFps' in job)) throw new Error('GIF action started extra downloads or an obsolete sampling mode');
         return selected[0]?.status === 'complete' ? selected[0] : null;
       }, 30000);
-      if (await evaluateOn(fixture, '!!document.querySelector("#video [data-testid=unlike]")')) throw new Error('GIF action liked the post');
+      if (!(await evaluateOn(fixture, '!!document.querySelector("#video [data-testid=unlike]")'))) throw new Error('GIF action did not like the post');
       const readGifClipboard = `(async()=>{const [item]=await navigator.clipboard.read();const text=await(await item.getType('text/plain')).text(),html=await(await item.getType('text/html')).text();const doc=new DOMParser().parseFromString(html,'text/html'),link=doc.querySelector('a');return {text,images:doc.querySelectorAll('img').length,insertionLine:link?.previousSibling?.nodeName==='BR'&&link.previousSibling.previousSibling?.nodeName==='BR',url:link?.href};})()`;
       const gifClipboard = await evaluateOn(fixture, readGifClipboard);
       if (gifClipboard.text.replace(/\r\n?/g,'\n') !== 'Ordinary video\n\n视频译文\n\nhttps://x.com/qa/status/303' || gifClipboard.images || !gifClipboard.insertionLine) throw new Error('GIF clipboard layout failed: '+JSON.stringify(gifClipboard));
@@ -305,19 +290,18 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       const gifBytes = await fs.readFile(gifDownload.filename);
       if (!gifBytes.subarray(0,6).toString().startsWith('GIF8') || gifBytes.at(-1)!==0x3b) throw new Error('Ordinary video GIF invalid');
       const buttonLayout = await evaluateOn(fixture, `(()=>{const gif=document.querySelector('#video .x-copy-gif-button'),copy=document.querySelector('#video .x-copy-post-button');gif.scrollIntoView({block:'center'});const a=gif.getBoundingClientRect(),b=copy.getBoundingClientRect();return {width:a.width,height:a.height,ordered:a.right<=b.left,rightmost:copy.parentElement.lastElementChild===copy};})()`);
-      if (buttonLayout.width !== 30 || buttonLayout.height !== 30 || !buttonLayout.ordered || !buttonLayout.rightmost) throw new Error('GIF action layout invalid: '+JSON.stringify(buttonLayout));
+      if (buttonLayout.width < 44 || buttonLayout.width > 90 || buttonLayout.height !== 26 || !buttonLayout.ordered || !buttonLayout.rightmost) throw new Error('GIF pill layout invalid: '+JSON.stringify(buttonLayout));
       const gifShot = await fixture.call('Page.captureScreenshot', { format: 'png' });
       await fs.writeFile(path.join(directory, 'video-gif.png'), Buffer.from(gifShot.data,'base64'));
+      // Alt no longer selects a second mode; a repeat click may queue another
+      // download once the first job completed, but never an obsolete source job.
       await evaluateOn(fixture, 'document.querySelector("#video .x-copy-gif-button").dispatchEvent(new MouseEvent("click",{altKey:true,bubbles:true}))');
-      const sourceGif = await waitFor(async () => {
-        const response = await evaluate('chrome.runtime.sendMessage({type:"getJobs"})');
-        const selected = response.data.find(job => job.postId === '303' && job.format === 'gif' && job.gifFps === 'source');
-        if (selected?.status === 'failed') throw new Error('Alt GIF download failed: '+JSON.stringify(selected));
-        return selected?.status === 'complete' ? selected : null;
-      }, 30000);
-      if (sourceGif.id === videoGif.id) throw new Error('GIF sampling modes deduplicated together');
-      const sourceGifClipboard = await evaluateOn(fixture, readGifClipboard);
-      if (JSON.stringify(sourceGifClipboard) !== JSON.stringify(gifClipboard) || await evaluateOn(fixture, '!!document.querySelector("#video [data-testid=unlike]")')) throw new Error('Alt GIF omitted translation, changed layout or liked the post');
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const allJobs = (await evaluate('chrome.runtime.sendMessage({type:"getJobs"})')).data;
+      const altJobs = allJobs.filter(job => job.postId === '303' && job.format === 'gif');
+      if (!altJobs.length || altJobs.some(job => 'gifFps' in job) || allJobs.some(job => job.gifFps === 'source')) throw new Error('Alt click created an obsolete sampling mode');
+      const altGifClipboard = await evaluateOn(fixture, readGifClipboard);
+      if (JSON.stringify(altGifClipboard) !== JSON.stringify(gifClipboard)) throw new Error('Alt GIF changed the clipboard layout');
       await evaluateOn(fixture, 'document.querySelector("#video .x-copy-post-button").click()');
       const videoMp4 = await waitFor(async () => {
         const response = await evaluate('chrome.runtime.sendMessage({type:"getJobs"})');
@@ -331,7 +315,7 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
       // Assert the original URL reaches Chrome, rather than requiring the
       // synthetic X URL to exist on the public server.
       if (mp4Download.url !== 'https://video.twimg.com/ext_tw_video/303/a.mp4' || !mp4Download.filename.endsWith('.mp4')) throw new Error('Original MP4 download routing changed');
-      const evidence = { capturedIds, focusFailure, clipboard, originalOnly, mergedCopy, mergedOriginal, jobs, videoGif, gifClipboard, sourceGif, sourceGifClipboard, videoMp4, ordinaryVideoCopy, download: { bytes: saved.length, filename: downloaded[0].filename }, originalRequests: seen.filter(url => url.includes('name=orig')) };
+      const evidence = { capturedIds, focusFailure, clipboard, originalOnly, mergedCopy, mergedOriginal, jobs, videoGif, gifClipboard, altGifClipboard, videoMp4, ordinaryVideoCopy, download: { bytes: saved.length, filename: downloaded[0].filename }, originalRequests: seen.filter(url => url.includes('name=orig')) };
       console.log(JSON.stringify({ e2e: evidence })); await fs.writeFile(path.join(directory, 'evidence.json'), JSON.stringify(evidence,null,2));
       const screenshot = await fixture.call('Page.captureScreenshot', { format: 'png' }); await fs.writeFile(path.join(directory, 'fixture.png'), Buffer.from(screenshot.data,'base64'));
       const popupTarget = await control.call('Target.createTarget', { url: `chrome-extension://${extensionId}/popup.html` });
@@ -343,5 +327,5 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
   }
   await control.call('Browser.close'); page.socket.close(); control.socket.close();
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => { for(const socket of sockets)socket.close(); browser?.kill(); });
-const verificationTimeout = process.argv.includes('--stress') ? 900000 : process.argv.includes('--volume') ? 180000 : 60000;
+const verificationTimeout = process.argv.includes('--stress') ? 900000 : process.argv.includes('--volume') ? 180000 : process.argv.includes('--e2e') ? 300000 : 60000;
 setTimeout(() => { browser?.kill(); console.error('Extension verification exceeded '+verificationTimeout+' ms'); process.exit(1); }, verificationTimeout).unref();

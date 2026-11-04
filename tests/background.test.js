@@ -19,33 +19,38 @@ function setup(options = {}) {
 const page = { id: 'extension', tab: { id: 7 }, url: 'https://x.com/home' };
 const popup = { id: 'extension', url: 'chrome-extension://extension/popup.html' };
 
-test('10 fps, legacy 15 fps and source GIF jobs stay independent, serial and retain mode on retry', async () => {
-  const modes = []; let active = 0, peak = 0;
+test('the single slim GIF recipe serializes conversions and deduplicates identical requests', async () => {
+  const conversions = []; let active = 0, peak = 0;
   const { service } = setup({ convert: async message => {
     if (message.type !== 'convertGif') return { ok: true };
-    active++; peak = Math.max(peak, active); modes.push(message.gifFps);
+    active++; peak = Math.max(peak, active); conversions.push(message);
     await new Promise(resolve => setTimeout(resolve, 10)); active--;
     throw new Error('conversion failed');
   } });
   const request = { type: 'downloadMedia', format: 'gif', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] };
-  const [sampled] = await service.handle({ ...request, gifFps: 10 }, page);
-  const [source] = await service.handle({ ...request, gifFps: 'source' }, page);
-  const [legacy] = await service.handle({ ...request, gifFps: 15 }, page);
-  const [duplicate] = await service.handle({ ...request, gifFps: 10 }, page);
-  assert.notEqual(sampled.id, source.id); assert.equal(duplicate.id, sampled.id);
-  assert.notEqual(legacy.id, sampled.id);
-  assert.equal(sampled.gifFps, 10); assert.equal(source.gifFps, 'source'); assert.equal(legacy.gifFps, 15);
+  const [first] = await service.handle(request, page);
+  const [duplicate] = await service.handle(request, page);
+  const [animated] = await service.handle({ ...request, media: [{ type: 'animated_gif', url: 'https://video.twimg.com/tweet_video/ABC.mp4' }] }, page);
+  const [mp4] = await service.handle({ ...request, format: 'mp4' }, page);
+  assert.equal(duplicate.id, first.id);
+  assert.notEqual(animated.id, first.id); assert.notEqual(mp4.id, first.id);
+  assert.equal(first.format, 'gif'); assert.equal(first.gifFps, undefined);
   await new Promise(resolve => setTimeout(resolve, 60));
-  assert.deepEqual(modes, [10, 'source', 15]); assert.equal(peak, 1);
-  await service.handle({ type: 'retryJob', jobId: sampled.id }, popup);
+  assert.equal(conversions.length, 2); assert.equal(peak, 1);
+  assert.ok(conversions.every(message => !('gifFps' in message)));
+  await service.handle({ type: 'retryJob', jobId: first.id }, popup);
   await new Promise(resolve => setTimeout(resolve, 20));
-  assert.deepEqual(modes, [10, 'source', 15, 10]);
+  assert.equal(conversions.length, 3);
 });
 
-test('GIF requests reject unsupported sampling modes without adding jobs', async () => {
+test('obsolete sampling fields are ignored instead of creating extra GIF jobs', async () => {
   const { service } = setup();
-  for (const gifFps of [0, 30, '15', null]) await assert.rejects(service.handle({ type: 'downloadMedia', format: 'gif', gifFps, postId: '123', media: [] }, page), /帧率/);
-  assert.deepEqual(await service.handle({ type: 'getJobs' }, popup), []);
+  const request = { type: 'downloadMedia', format: 'gif', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] };
+  const jobs = [];
+  for (const gifFps of [0, 30, '15', 'source', 10, null]) jobs.push((await service.handle({ ...request, gifFps }, page))[0]);
+  assert.equal(new Set(jobs.map(job => job.id)).size, 1);
+  assert.ok(jobs.every(job => job.format === 'gif' && job.gifFps === undefined));
+  await assert.rejects(service.handle({ type: 'downloadMedia', format: 'webp', postId: '123', media: [] }, page), /格式/);
 });
 
 test('long GIF conversion uses short acknowledged requests and generation-tagged result polling', async () => {
@@ -59,13 +64,13 @@ test('long GIF conversion uses short acknowledged requests and generation-tagged
       return { ok: true };
     }
   });
-  const [job] = await service.handle({ type: 'downloadMedia', format: 'gif', gifFps: 15, postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] }, page);
+  const [job] = await service.handle({ type: 'downloadMedia', format: 'gif', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] }, page);
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'blob:chrome-extension://extension/long-conversion');
   const conversion = messages.find(message => message.type === 'convertGif');
   assert.equal(conversion.conversionId, job.id + ':0');
-  assert.equal(conversion.gifFps, 15);
+  assert.equal('gifFps' in conversion, false);
   assert.equal(messages.filter(message => message.type === 'getConversionResult').length, 2);
   assert.ok(messages.filter(message => message.type === 'getConversionResult').every(message => message.conversionId === conversion.conversionId));
 });

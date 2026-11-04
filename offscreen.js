@@ -41,10 +41,10 @@ async function probe(ffmpeg, filename, output) {
   catch { throw new Error(`无法读取视频信息（FFprobe 返回 ${code}，没有输出文件）`); }
   return gif.parseProbeOutput(code, result);
 }
-export async function convertGif({ jobId, url, testBytes, gifFps = 'source' }) {
+export async function convertGif({ jobId, url, testBytes }) {
   if (active) throw new Error('已有 GIF 正在转换，请稍候');
-  const paletteArgs = gif.paletteArguments('input.mp4', gifFps);
-  const outputArgs = gif.argumentsFor('input.mp4', 'output.gif', gifFps);
+  const paletteArgs = gif.paletteArguments('input.mp4');
+  const outputArgs = gif.argumentsFor('input.mp4', 'output.gif');
   const ffmpeg = new FFmpeg(), controller = new AbortController();
   const logs = [];
   ffmpeg.on('log', ({ message }) => { logs.push(message); if (logs.length > 14) logs.shift(); });
@@ -62,23 +62,22 @@ export async function convertGif({ jobId, url, testBytes, gifFps = 'source' }) {
     await ffmpeg.load({ classWorkerURL: chrome.runtime.getURL('vendor/ffmpeg/worker.js'), coreURL: chrome.runtime.getURL('vendor/core/ffmpeg-core.js'), wasmURL: chrome.runtime.getURL('vendor/core/ffmpeg-core.wasm') });
     await ffmpeg.writeFile('input.mp4', bytes);
     const info = gif.parseProbe(await probe(ffmpeg, 'input.mp4', 'input.json'), size);
-    stage = '分析完整动图的颜色'; notify(jobId, stage);
+    stage = '分析瘦身 GIF 的调色板'; notify(jobId, stage);
     const paletteCode = await ffmpeg.exec(paletteArgs, gif.limits.timeout);
     if (paletteCode !== 0) throw new Error('GIF 调色板生成失败');
-    stage = gifFps === 'source' ? '按原尺寸和源帧率转换 GIF' : `采样 ${gifFps} fps GIF，宽度最多 800 px`; notify(jobId, stage);
+    stage = `制作瘦身 GIF：${gif.preset.fps} fps / 最宽 ${gif.preset.maxWidth} px / ${gif.preset.colors} 色`; notify(jobId, stage);
     const code = await ffmpeg.exec(outputArgs, gif.limits.timeout);
     if (code !== 0) throw new Error('GIF 转换失败或超过处理时间');
     const output = await ffmpeg.readFile('output.gif');
     if (output.length >= gif.limits.output || output[output.length - 1] !== 0x3b) throw new Error('GIF 超过 256 MiB 或输出不完整，请下载原始 MP4');
     const resultInfo = await probe(ffmpeg, 'output.gif', 'output.json');
     const duration = Number(resultInfo.streams?.[0]?.duration || resultInfo.format?.duration);
-    const outputFps = gifFps === 'source' ? info.fps : gifFps;
-    if (!Number.isFinite(duration) || Math.abs(duration - info.duration) > Math.max(0.2, 2 / outputFps)) throw new Error('GIF 时长校验未通过，请下载原始 MP4');
+    if (!Number.isFinite(duration) || Math.abs(duration - info.duration) > Math.max(0.2, 2 / gif.preset.fps)) throw new Error('GIF 时长校验未通过，请下载原始 MP4');
     const blobUrl = URL.createObjectURL(new Blob([output], { type: 'image/gif' }));
     release(jobId);
     const expires = setTimeout(() => release(jobId), 30 * 60 * 1000);
     blobs.set(jobId, { url: blobUrl, timer: expires });
-    return { ok: true, url: blobUrl, size: output.length, width: Number(resultInfo.streams?.[0]?.width), height: Number(resultInfo.streams?.[0]?.height), duration, gifFps, frames: Number(resultInfo.streams?.[0]?.nb_frames) || 0 };
+    return { ok: true, url: blobUrl, size: output.length, width: Number(resultInfo.streams?.[0]?.width), height: Number(resultInfo.streams?.[0]?.height), duration, frames: Number(resultInfo.streams?.[0]?.nb_frames) || 0 };
   } catch (error) {
     if (timedOut) throw new Error('GIF 转换超过 10 分钟，请下载原始 MP4');
     if (controller.signal.aborted) throw new Error('GIF 转换已取消');
@@ -107,7 +106,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       clearTimeout(entry.timer); entry.timer = setTimeout(expire, 5 * 60 * 1000); entry.timer?.unref?.();
     };
     respond({ ok: true, pending: true });
-    void convertGif({ jobId: message.jobId, url: message.url, gifFps: message.gifFps }).then(finish, error => finish({ ok: false, error: error.message }));
+    void convertGif({ jobId: message.jobId, url: message.url }).then(finish, error => finish({ ok: false, error: error.message }));
     return false;
   }
   if (message.type === 'getConversionResult') {

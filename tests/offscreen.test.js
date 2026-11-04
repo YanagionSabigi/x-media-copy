@@ -25,7 +25,7 @@ test('offscreen conversion acknowledges immediately and isolates terminal result
     const pending = listener({ target: 'offscreen', ...message }, sender, value => { response = JSON.parse(JSON.stringify(value)); });
     return { response, pending };
   };
-  const started = send({ type: 'convertGif', conversionId: 'job:0', jobId: 'job', url: 'https://invalid.test/a.mp4', gifFps: 15 });
+  const started = send({ type: 'convertGif', conversionId: 'job:0', jobId: 'job', url: 'https://invalid.test/a.mp4' });
   assert.equal(started.pending, false);
   assert.deepEqual(started.response, { ok: true, pending: true });
   await new Promise(resolve => setTimeout(resolve, 0));

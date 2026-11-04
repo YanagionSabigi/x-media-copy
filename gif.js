@@ -1,8 +1,10 @@
 (function (root) {
   'use strict';
+  // One fixed, deliberately lossy preset for chats: 10 fps / max 480 px wide / 128 colors.
   // Two streaming passes do not retain every decoded frame in memory.
   // Bound individual frames instead of rejecting cumulative pixel workloads.
   const limits = Object.freeze({ input: 128 * 1024 ** 2, output: 256 * 1024 ** 2, seconds: 60, framePixels: 3840 * 2160, timeout: 600000 });
+  const preset = Object.freeze({ fps: 10, maxWidth: 480, colors: 128 });
   function validate({ size, width, height, duration, fps }) {
     if (![size, width, height, duration, fps].every(value => Number.isFinite(value) && value > 0)) throw new Error('无法验证动图的尺寸、时长或帧率');
     if (size > limits.input) throw new Error('动图原视频超过 128 MiB，请下载 MP4 备用文件');
@@ -18,21 +20,20 @@
     validate(result);
     return result;
   }
-  function samplingFilter(gifFps) {
-    if (gifFps === 'source') return '';
-    if (![10, 15].includes(gifFps)) throw new Error('GIF 帧率模式无效');
-    return `fps=${gifFps},scale=w='min(800,iw)':h=-1:flags=lanczos,`;
+  function samplingFilter() {
+    // Only shrink; narrower sources keep their original width.
+    return `fps=${preset.fps},scale=w='min(${preset.maxWidth},iw)':h=-1:flags=lanczos`;
   }
-  function argumentsFor(input, output, gifFps = 'source') {
-    const sampling = samplingFilter(gifFps);
-    // Stable ordered dithering reduces frame-to-frame noise and GIF size.
-    // Keep the original 256-color palette budget and source/legacy behavior.
-    const use = gifFps === 10 ? 'paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle' : 'paletteuse=dither=sierra2_4a';
-    const graph = sampling ? '[0:v:0]' + sampling.slice(0, -1) + '[sampled];[sampled][1:v:0]' + use : '[0:v:0][1:v:0]' + use;
-    const frameOptions = gifFps === 10 ? ['-gifflags', '+offsetting+transdiff'] : [];
-    return ['-i', input, '-i', 'palette.png', '-lavfi', graph, '-an', '-fps_mode', 'passthrough', ...frameOptions, '-loop', '0', '-fs', String(limits.output), output];
+  function argumentsFor(input, output) {
+    // Stable ordered dithering + rectangle diff keep the LZW input small.
+    const graph = `[0:v:0]${samplingFilter()}[sampled];[sampled][1:v:0]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`;
+    return ['-i', input, '-i', 'palette.png', '-lavfi', graph, '-an', '-fps_mode', 'passthrough',
+      '-gifflags', '+offsetting+transdiff', '-loop', '0', '-fs', String(limits.output), output];
   }
-  function paletteArguments(input, gifFps = 'source') { return ['-i', input, '-vf', samplingFilter(gifFps) + 'palettegen=stats_mode=full', '-frames:v', '1', '-update', '1', 'palette.png']; }
+  function paletteArguments(input) {
+    return ['-i', input, '-vf', samplingFilter() + `,palettegen=stats_mode=full:max_colors=${preset.colors}`,
+      '-frames:v', '1', '-update', '1', 'palette.png'];
+  }
   function parseProbeOutput(code, text) {
     // @ffmpeg/core 0.12.10 can leave Module.ret at -1 after successful ffprobe.
     if (code !== 0 && code !== -1) throw new Error(`视频信息读取失败（${code}）`);
@@ -40,7 +41,7 @@
     if (!Array.isArray(result.streams) || !result.streams.length) throw new Error('媒体没有可解码的视频流');
     return result;
   }
-  const api = { limits, validate, parseProbe, argumentsFor, paletteArguments, parseProbeOutput };
+  const api = { limits, preset, validate, parseProbe, argumentsFor, paletteArguments, parseProbeOutput };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.XCopyGif = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

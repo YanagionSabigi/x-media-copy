@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "X 图文复制与媒体下载",
-  "version": "1.1.6",
-  "version_name": "1.1.6",
-  "description": "复制原文、译文与 orig 原图，清理标签并点赞；浏览器下载视频，扩展内转换和下载 GIF。",
+  "version": "1.2.0",
+  "version_name": "1.2.0-ezgif-test",
+  "description": "复制原文、译文与 orig 原图并点赞；视频和动图一键制作 10 fps / 480 px / 128 色的瘦身 GIF。",
   "minimum_chrome_version": "116",
   "permissions": [
     "clipboardWrite",
