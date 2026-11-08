@@ -34,7 +34,7 @@ function fixture(html, options = {}) {
   }
   Object.assign(dom.window, { XCopyCore: core, XCopyExtractor: extractor, XCopyMedia: options.media ? require('../media.js') : undefined,
     XCopyImageMerge: { mergeImages: options.mergeImages || (async images => images) },
-    chrome: { runtime: { id: 'test-extension', getManifest: () => { if (options.invalidated?.()) throw new Error('Extension context invalidated.'); return {}; }, connect: ({ name }) => { const listeners = []; const port = { name, disconnected: false, onDisconnect: { addListener(fn) { listeners.push(fn); } }, disconnect() { port.disconnected = true; listeners.forEach(fn => fn()); } }; ports.push(port); return port; }, sendMessage: async request => ({ ok: true, data: await options.message?.(request) }), onMessage: { addListener() {}, removeListener() {} } } },
+    chrome: { runtime: { id: 'test-extension', getManifest: () => { if (options.invalidated?.()) throw new Error('Extension context invalidated.'); return {}; }, connect: ({ name }) => { const listeners = []; const port = { name, disconnected: false, onDisconnect: { addListener(fn) { listeners.push(fn); } }, disconnect() { port.disconnected = true; listeners.forEach(fn => fn()); } }; ports.push(port); return port; }, sendMessage: async request => ({ ok: true, data: request.type==='stageMergedImage' ? (options.stageMergedImage ? await options.stageMergedImage(request) : {fileUrl:'file:///C:/Downloads/X/clipboard/1.png'}) : await options.message?.(request) }), onMessage: { addListener() {}, removeListener() {} } } },
     XCopyClipboard: { inspectImages: options.inspectImages, writeText: async data => { await options.beforeWrite?.(data); writes.push(core.buildClipboardPayload(data)); }, writeImage: async data => { await options.beforeWrite?.(data); writes.push({ image: data }); } } });
   dom.window.eval(fs.readFileSync(path.join(__dirname, "../content.js"), "utf8"));
   return { dom, document: dom.window.document, writes, likes, ports,
@@ -633,6 +633,7 @@ test('Shift copies text and translation with only the merged photo, then likes',
     beforeWrite: data => {
       assert.equal(data.mergedImage?.dataUrl, 'data:image/png;base64,TUVSR0VE');
       assert.equal(data.mergedImage, data.images[0]);
+      assert.equal(data.mergedImageFileUrl,'file:///C:/Downloads/X/clipboard/1.png');
     },
     mergeImages: async images => {
       assert.equal(images.length, 2);
@@ -646,11 +647,23 @@ test('Shift copies text and translation with only the merged photo, then likes',
     await tick(30);
     assert.equal(setup.writes.length, 1);
     assert.equal((setup.writes[0].html.match(/<img /g) || []).length, 1);
-    assert.match(setup.writes[0].html, /TUVSR0VE/);
+    assert.match(setup.writes[0].html, /file:\/\/\/C:\/Downloads\/X\/clipboard\/1.png/);
     assert.equal(setup.writes[0].plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
     assert.equal(setup.likes.length, 1);
     assert.equal(requests.some(request => request.type === 'downloadMedia'), false);
   } finally { setup.dom.window.close(); }
+});
+
+test('merged local staging failure leaves clipboard and likes untouched',async()=>{
+  const setup=fixture(photoPost(1,'<img src="https://pbs.twimg.com/media/SECOND.jpg">'),{
+    media:true,mergeImages:async()=>[{dataUrl:'data:image/png;base64,TUVSR0VE'}],
+    stageMergedImage:async()=>{throw new Error('合图保存失败')},message:request=>request.urls?imageResult(request):true
+  });
+  try{
+    setup.document.querySelector('.x-copy-post-button').dispatchEvent(new setup.dom.window.MouseEvent('click',{shiftKey:true}));await tick(30);
+    assert.equal(setup.writes.length,0);assert.equal(setup.likes.length,0);
+    assert.match(setup.document.querySelector('.x-copy-toast-error').textContent,/保存失败/);
+  }finally{setup.dom.window.close()}
 });
 
 test('Shift merge failure leaves clipboard and like untouched and button can be retried', async () => {
@@ -664,32 +677,6 @@ test('Shift merge failure leaves clipboard and like untouched and button can be 
     assert.equal(setup.writes.length, 0); assert.equal(setup.likes.length, 0);
     assert.equal(button.disabled, false);
     assert.match(setup.document.querySelector('.x-copy-toast-error').textContent, /矩形/);
-  } finally { setup.dom.window.close(); }
-});
-
-test('oversized Shift merge offers the exact lossless PNG and a separate text/source copy without claiming success or liking', async () => {
-  const image = { dataUrl: 'data:image/png;base64,TUVSR0VE', width: 5727, height: 2892 };
-  const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {
-    media: true, mergeImages: async () => [image],
-    beforeWrite: data => { if (data.mergedImage) { const error = new Error('超过 QQ 图文兼容上限'); error.code = 'MERGED_CLIPBOARD_TOO_LARGE'; throw error; } },
-    message: request => request.urls ? imageResult(request) : true
-  });
-  try {
-    setup.document.querySelector('.x-copy-post-button').dispatchEvent(new setup.dom.window.MouseEvent('click', { shiftKey: true }));
-    await tick(30);
-    assert.equal(setup.writes.length, 0); assert.equal(setup.likes.length, 0);
-    const notice = setup.document.querySelector('.x-copy-toast-error');
-    assert.match(notice.textContent, /未复制/); assert.doesNotMatch(notice.textContent, /已复制/);
-    const download = notice.querySelector('a[download]');
-    assert.equal(download.href, image.dataUrl); assert.equal(download.download, '1_merged.png');
-    const copy = notice.querySelector('button');
-    copy.click(); await tick(10);
-    assert.equal(setup.writes.length, 1);
-    assert.equal(setup.writes[0].plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
-    assert.doesNotMatch(setup.writes[0].html, /<img/);
-    assert.equal(setup.likes.length, 0); assert.ok(download.isConnected);
-    setup.visibility(true);
-    assert.equal(download.isConnected, false);
   } finally { setup.dom.window.close(); }
 });
 

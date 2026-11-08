@@ -2,13 +2,13 @@
 
 Chrome 扩展，在 X 推文底部添加复制与 GIF 按钮。把原文、页面译文、原图和出处一起复制到聊天窗口或文档，也可以下载 MP4，或把视频和动图制作成 GIF。
 
-当前版本 **1.2.4**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
+当前版本 **1.2.5**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
 
 ## 安装
 
 需要 Chrome 116 或以上版本，以及能正常访问 X 的网络环境。
 
-1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.2.4.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
+1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.2.5.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
 2. 在 Chrome 地址栏输入 `chrome://extensions`，打开右上角的「开发者模式」。
 3. 点击「加载已解压的扩展程序」，选择直接包含 `manifest.json` 的文件夹。
 4. 打开或刷新 `https://x.com/`、`https://twitter.com/` 页面。
@@ -78,7 +78,6 @@ https://x.com/example/status/1234567890
 - **更新后按钮失效**：重新加载扩展后，还需要刷新 X 页面。
 - **微信 / QQ 没有一起粘贴图片**：混合图文的接收方式取决于客户端。GIF 和视频下载后可拖入聊天窗口。
 - **多图无法合成**：合图按附件顺序推断布局，轻微尺寸差异会补透明边；尺寸差异过大或超过上限时会提示失败，可改用普通点击复制各张图片。
-- **合图在 QQ 只粘贴出文案**：超大的混合图文可能被 QQ 截断。新版会在超出兼容上限时提示「未复制」，提供无损 PNG 下载和单独复制文案、出处的按钮；可将 PNG 作为文件发送。
 - **视频没有下载**：目前需要完整 MP4 地址，仅有 HLS 流时可用 [猫抓 Cat Catch](https://github.com/xifangczy/cat-catch) 等工具处理。
 
 GIF 当前支持最长 60 秒、输入最多 128 MiB、单帧面积不超过 3840×2160 的视频，输出需小于 256 MiB，处理最多 10 分钟。详细限制、文字间距、合图规则及排查方法见 [使用细节](USAGE.md)。

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "X 图文复制与媒体下载",
-  "version": "1.2.4",
-  "version_name": "1.2.4",
+  "version": "1.2.5",
+  "version_name": "1.2.5",
   "description": "复制原文、译文与 orig 原图并点赞；视频和动图一键制作 10 fps / 480 px / 128 色的瘦身 GIF。",
   "minimum_chrome_version": "116",
   "permissions": [

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>QQ 图文复制对照</title>
+<style>
+body{font:16px/1.7 system-ui,sans-serif;max-width:880px;margin:40px auto;padding:0 24px;color:#202124;background:#f8fafc}
+h1{font-size:26px}p{color:#475569}section{padding:18px 22px;background:white;border:1px solid #dbe2ea;border-radius:10px;margin:16px 0}
+button{font:inherit;padding:8px 16px;cursor:pointer;border:1px solid #94a3b8;border-radius:6px;background:white}button:disabled{opacity:.5;cursor:wait}
+output{display:block;white-space:pre-wrap;font-size:14px;color:#334155}#status{position:sticky;top:0;background:#e2e8f0;padding:12px}#copy-surface img{max-width:100%;height:auto}#copy-surface{margin-top:28px;background:white;padding:16px}
+</style>
+<h1>QQ 图文复制对照</h1>
+<p>请在 Chrome 打开本页。每次点击一个复制按钮，再到 QQ 输入框粘贴查看即可，<strong>不要发送</strong>。图片全部来自同一个公开帖子，测试不缩放、不转 JPEG、不上传内容。</p>
+<p>第一轮 A–E 已保留。第二轮请只测试 F、G：仍是同一份 PNG，分别改为短图片地址、分行的图片数据，以检查图片引用的解析差异。</p>
+<output id="status">正在加载同一组测试图片……</output>
+<section><button data-mode="original" disabled>A · 原始四图</button><p>普通点击所用的四张 JPEG 原图。</p></section>
+<section><button data-mode="merged" disabled>B · 合成 PNG，当前方式</button><p>同一份无损合图，使用扩展现有的图文写入方式。</p></section>
+<section><button data-mode="selection" disabled>C · 合成 PNG，网页选区复制</button><p>图片和文字先在网页中呈现，再由 Chrome 复制整个选区。</p></section>
+<section><button data-mode="document" disabled>D · 合成 PNG，完整网页格式</button><p>图片字节不变，添加完整网页结构和明确的图片宽高。</p></section>
+<section><button data-mode="native" disabled>E · 合成 PNG，同时提供图片格式</button><p>图片字节不变，同时提供原生 PNG 与混合图文。检查 QQ 会选择哪种格式。</p></section>
+<section><button data-mode="url" disabled>F · 同一 PNG，短图片地址</button><p>同一份 PNG 由本机地址引用，文案和出处仍一同复制。不上传图片。</p></section>
+<section><button data-mode="wrapped" disabled>G · 同一 PNG，图片数据分行</button><p>内嵌同一份 PNG，仅将图片数据分行，图片字节与分辨率不变。</p></section>
+<section><button data-mode="blob" disabled>H · 同一 PNG，浏览器临时地址</button><p>不使用本地服务器的图片地址，改用浏览器生成的临时地址；用于确认扩展能否直接采用这种方式。</p></section>
+<section><button data-mode="file" disabled>I · 同一 PNG，直接引用本地文件</button><p>图片仍是同一个 PNG，不新增下载；测试 QQ 是否能通过文件地址读取它。</p></section>
+<div id="copy-surface" contenteditable="true" aria-label="本次复制内容预览"></div>
+<script src="/core.js"></script><script src="/clipboard.js"></script>
+<script>
+const statusNode=document.querySelector('#status'),surface=document.querySelector('#copy-surface');
+const text={original:'人生発展途上の僕ら',translation:'QQ 图文复制格式对照',postUrl:'https://x.com/s0gano_/status/2119234009901543927'};
+const toDataUrl=blob=>new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(blob)});
+let originals,merged,png,blobUrl,fileUrl;
+async function load(){
+  png=await(await fetch('/merged.png')).blob();
+  blobUrl=URL.createObjectURL(png);
+  fileUrl=(await(await fetch('/sample-location.json')).json()).fileUrl;
+  const bitmap=await createImageBitmap(png);
+  merged={dataUrl:await toDataUrl(png),width:bitmap.width,height:bitmap.height};bitmap.close();
+  originals=await Promise.all([1,2,3,4].map(async n=>({dataUrl:await toDataUrl(await(await fetch('/'+n+'.jpg')).blob())})));
+  statusNode.textContent='已就绪：同一份 PNG，'+merged.width+' × '+merged.height+'，'+png.size.toLocaleString()+' 字节。第二轮请测试 F、G。';
+  document.querySelectorAll('button').forEach(button=>button.disabled=false);
+}
+document.querySelectorAll('button').forEach(button=>button.onclick=async()=>{
+  const mode=button.dataset.mode,images=mode==='original'?originals:[merged];
+  const data={...text,images,...(mode==='original'?{}:{mergedImage:merged})};
+  const payload=XCopyCore.buildClipboardPayload(data);
+  let htmlBytes=new Blob([payload.html]).size;
+  document.querySelectorAll('button').forEach(b=>b.disabled=true);
+  try{
+    if(mode==='selection'){
+      surface.innerHTML=payload.html;
+      await Promise.all([...surface.querySelectorAll('img')].map(img=>img.decode()));
+      const selection=getSelection(),range=document.createRange();
+      range.selectNodeContents(surface);selection.removeAllRanges();selection.addRange(range);
+      if(!document.execCommand('copy'))throw new Error('Chrome 未执行选区复制');
+      selection.removeAllRanges();
+    }else if(['document','native','url','wrapped','blob','file'].includes(mode)){
+      let html=payload.html;
+      if(mode==='document')html='<html><head><meta charset="utf-8"></head><body><!--StartFragment-->'+html.replace('<img ', '<img width="'+merged.width+'" height="'+merged.height+'" ')+'<!--EndFragment--></body></html>';
+      if(mode==='url')html=html.replace(merged.dataUrl,location.origin+'/merged.png');
+      if(mode==='blob')html=html.replace(merged.dataUrl,blobUrl);
+      if(mode==='file')html=html.replace(merged.dataUrl,fileUrl);
+      if(mode==='wrapped'){
+        const [prefix,base64]=merged.dataUrl.split(',');
+        html=html.replace(merged.dataUrl,prefix+','+base64.match(/.{1,4096}/g).join('\r\n'));
+      }
+      htmlBytes=new Blob([html]).size;
+      const formats={'text/plain':new Blob([payload.plain],{type:'text/plain'}),'text/html':new Blob([html],{type:'text/html'})};
+      if(mode==='native')formats['image/png']=png;
+      await navigator.clipboard.write([new ClipboardItem(formats)]);
+    }else await XCopyClipboard.writeText(data);
+    if(mode!=='selection')surface.innerHTML=payload.html;
+    statusNode.textContent=button.textContent+'：复制操作已完成。请到 QQ 草稿中粘贴，检查图片与最后的链接是否完整；不要发送。\nHTML 字节数：'+htmlBytes.toLocaleString();
+  }catch(error){statusNode.textContent=button.textContent+'：复制失败 — '+error.message}
+  finally{document.querySelectorAll('button').forEach(b=>b.disabled=false)}
+});
+load().catch(error=>statusNode.textContent='测试素材读取失败：'+error.message);
+</script></html>

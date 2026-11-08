@@ -56,7 +56,7 @@
     return escapeHtml(value).replace(/\n/g, "<br>");
   }
 
-  function buildClipboardPayload({ original, translation, postUrl, images = [], reserveGifLine = false, mergedImage = null }) {
+  function buildClipboardPayload({ original, translation, postUrl, images = [], reserveGifLine = false, mergedImage = null, mergedImageFileUrl = '' }) {
     original = stripHashtags(original);
     translation = stripHashtags(translation);
     postUrl = canonicalPostUrl(postUrl);
@@ -69,15 +69,21 @@
     const htmlSections = [];
     if (original) htmlSections.push(htmlText(original));
     if (translation) htmlSections.push(htmlText(translation));
-    let imageHtml = '';
+    let imageHtml = '', localSource = '';
+    if (mergedImageFileUrl) {
+      try {
+        const url = new URL(mergedImageFileUrl);
+        if (!mergedImage || images.length !== 1 || images[0] !== mergedImage || url.protocol !== 'file:' || url.hostname || url.search || url.hash || !url.pathname.toLowerCase().endsWith('.png')) throw new Error();
+        localSource = url.href;
+      } catch { throw new Error('合图的本地文件引用无效'); }
+    }
     for (const item of images) {
       if (/^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/.test(item.dataUrl || '')) {
-        imageHtml += `<img src="${escapeHtml(item.dataUrl)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
+        imageHtml += `<img src="${escapeHtml(localSource || item.dataUrl)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
       }
     }
     const body = htmlSections.join('<br><br>');
     const link = postUrl ? `<a href="${escapeHtml(postUrl)}">${escapeHtml(postUrl)}</a>` : '';
-    if (mergedImage) return { plain, html: `<div>${[body, link, imageHtml].filter(Boolean).join('<br>')}</div>` };
     const content = [body, imageHtml].filter(Boolean).join('<br>');
     return { plain, html: `<div>${[content, link].filter(Boolean).join(reserveGifLine ? '<br><br>' : '<br>')}</div>` };
   }

@@ -2,6 +2,23 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const core = require("../core.js");
 
+test('merged HTML references the staged local PNG once and retains prose and source', () => {
+  const image={dataUrl:'data:image/png;base64,AAAA'};
+  const result=core.buildClipboardPayload({original:'Source',translation:'译文',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image,mergedImageFileUrl:'file:///C:/Downloads/X/clipboard/1.png'});
+  assert.equal(result.plain,'Source\n\n译文\nhttps://x.com/a/status/1');
+  assert.match(result.html,/src="file:\/\/\/C:\/Downloads\/X\/clipboard\/1.png"/);
+  assert.doesNotMatch(result.html,/base64/);assert.match(result.html,/译文.*<img.*https:\/\/x.com\/a\/status\/1/);
+  assert.ok(result.html.length<1000);
+});
+
+test('local merged clipboard references reject remote hosts and unrelated image bindings', () => {
+  const image={dataUrl:'data:image/png;base64,AAAA'};
+  for(const mergedImageFileUrl of ['https://evil.test/a.png','file://server/share/a.png','file:///C:/a.html','javascript:alert(1)']){
+    assert.throws(()=>core.buildClipboardPayload({images:[image],mergedImage:image,mergedImageFileUrl}),/本地/);
+  }
+  assert.throws(()=>core.buildClipboardPayload({images:[image],mergedImageFileUrl:'file:///C:/a.png'}),/本地/);
+});
+
 test('GIF clipboard leaves one empty insertion line before the source in both formats', () => {
   const result = core.buildClipboardPayload({ original: 'Source <text> #art', translation: '中文 & 译文 #艺术', postUrl: 'https://x.com/a/status/123?s=20', reserveGifLine: true });
   assert.equal(result.plain, 'Source <text>\n\n中文 & 译文\n\nhttps://x.com/a/status/123');
@@ -88,13 +105,6 @@ test('HTML embeds original bytes before the source link without changing plain t
   assert.equal(result.plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
   assert.match(result.html, /译文[\s\S]*<img[^>]+data:image\/png;base64,AAAA[\s\S]*https:\/\/x.com\/a\/status\/1/);
   assert.doesNotMatch(result.html, /width="1600"/);
-});
-
-test('merged copy places the source before large image data so a receiver cannot truncate it with the image', () => {
-  const image = { dataUrl: 'data:image/png;base64,AAAA' };
-  const result = core.buildClipboardPayload({ original: 'Source', translation: '译文', postUrl: 'https://x.com/a/status/1', images: [image], mergedImage: image });
-  assert.equal(result.plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
-  assert.match(result.html, /译文<br><a [^>]+>https:\/\/x.com\/a\/status\/1<\/a><br><img/);
 });
 
 test('compact layout has one blank line only between languages and no breaks between images', () => {

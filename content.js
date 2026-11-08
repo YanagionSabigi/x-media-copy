@@ -239,7 +239,6 @@
   }
   function resetImageState(resume) {
     imageEpoch++;
-    document.querySelector('.x-copy-toast-download')?.remove();
     for (const slot of pendingCopies) discardImageRead(slot);
     for (const key of preparedImages.keys()) dropEntry(key);
     for (const value of candidates.values()) clearTimeout(value.dwell);
@@ -279,28 +278,6 @@
     try { return await operation(); }
     finally { copying = false; schedulePrefetch(); }
   }
-  function offerMergedDownload(image, data, postUrl, epoch) {
-    const node = toast('未复制：无损合图的图文数据过大，QQ 可能丢失图片和出处。请下载 PNG 后作为文件发送；文案和出处可单独复制。', true, true);
-    node.classList.add('x-copy-toast-download');
-    const download = document.createElement('a');
-    download.textContent = '下载无损合成图 PNG';
-    download.download = `${postUrl.match(/\/status\/(\d+)/)?.[1] || 'post'}_merged.png`;
-    download.href = image.dataUrl;
-    node.append(download);
-    const texts = { original: data.original, translation: data.translation, postUrl };
-    const copy = document.createElement('button');
-    copy.type = 'button'; copy.textContent = '复制文案和出处';
-    copy.addEventListener('click', async () => {
-      copy.disabled = true;
-      try {
-        assertPage(epoch);
-        await clipboard.writeText(texts);
-        copy.textContent = '已复制文案和出处，请另行发送 PNG 文件';
-      } catch (error) { showError(error); }
-      finally { copy.disabled = false; }
-    });
-    node.append(copy);
-  }
   function findPost(postUrl) {
     if (!postUrl) return null;
     return [...document.querySelectorAll("article")].find(article => extractor.postUrl(article) === postUrl) || null;
@@ -337,21 +314,28 @@
     assertPage(epoch);
     if (!findPost(sourcePostUrl)) { const error = new Error('帖子已离开页面，请在原帖上重试'); error.stalePage = true; throw error; }
     const merging = data.mergePhotos && images.length > 1;
-    if (merging) {
-      toast('正在读取原图并合成一张图片，请保持此页激活');
-      images = await globalThis.XCopyImageMerge.mergeImages(images, () => assertPage(epoch));
-    } else if (clipboard.inspectImages) images = await clipboard.inspectImages(images);
-    assertPage(epoch);
-    const imageCount = images.length;
-    try { await clipboard.writeText({ ...data, images, mergedImage: merging ? images[0] : null }); }
-    catch (error) {
-      if (merging && error.code === 'MERGED_CLIPBOARD_TOO_LARGE') {
+    let mergedImageFileUrl = '', mergedDownloadId;
+    try {
+      if (merging) {
+        toast('正在读取原图并合成一张图片，请保持此页激活');
+        images = await globalThis.XCopyImageMerge.mergeImages(images, () => assertPage(epoch));
         assertPage(epoch);
-        offerMergedDownload(images[0], data, sourcePostUrl, epoch);
-        return;
-      }
+        toast('正在准备无损合图文件，请保持此页激活');
+        const staged = await send({type:'stageMergedImage',postId:sourcePostUrl.match(/\/status\/(\d+)/)?.[1],dataUrl:images[0].dataUrl});
+        mergedDownloadId = staged?.downloadId;
+        assertPage(epoch);
+        if (!staged || typeof staged.fileUrl !== 'string') throw new Error('无损合图文件没有准备完成，请重试');
+        mergedImageFileUrl = staged.fileUrl;
+      } else if (clipboard.inspectImages) images = await clipboard.inspectImages(images);
+      assertPage(epoch);
+      await clipboard.writeText({ ...data, images, mergedImage: merging ? images[0] : null, mergedImageFileUrl });
+      // Keep the staging lease until the clipboard write has completed.
+      if (merging) await send({type:'confirmMergedCopy',downloadId:mergedDownloadId});
+    } catch (error) {
+      if (Number.isInteger(mergedDownloadId)) await send({type:'releaseMergedCopy',downloadId:mergedDownloadId}).catch(() => {});
       throw error;
     }
+    const imageCount = images.length;
     // The system clipboard owns its data now; do not pin a large temporary
     // copy while waiting for like confirmation or optional media resolution.
     images = null;

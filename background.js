@@ -16,7 +16,9 @@ if (typeof importScripts === 'function') importScripts('media.js');
     const originalCache = new Map(), pendingImages = new Map(), imageQueue = [], owners = new Map();
     const later = dependencies.setTimeout || setTimeout, cancelTimer = dependencies.clearTimeout || clearTimeout;
     let cachedImageBytes = 0, activeImages = 0, activePrefetch = 0, expiryTimer;
-    let jobs = [], gifQueue = Promise.resolve(), creating;
+    let jobs = [], gifQueue = Promise.resolve(), creating, stagingMerged = false;
+    let mergedFiles = [], activeMergedFile = null, mergedFileQueue = Promise.resolve();
+    const mergedFileStore = api.storage.local;
     const ready = (async () => {
       const saved = await api.storage.session.get('jobs');
       jobs = Array.isArray(saved.jobs) ? saved.jobs.slice(-100) : [];
@@ -27,6 +29,9 @@ if (typeof importScripts === 'function') importScripts('media.js');
         } else job.status = 'failed';
         if (job.status === 'failed') job.error = '扩展后台已重启，请重试此任务';
       }
+      const cached = await mergedFileStore.get(['mergedClipboardFiles','activeMergedClipboardId']);
+      mergedFiles = Array.isArray(cached.mergedClipboardFiles) ? cached.mergedClipboardFiles.filter(file => Number.isInteger(file.id) && Number.isFinite(file.createdAt)) : [];
+      activeMergedFile = cached.activeMergedClipboardId ?? null;
     })();
     function senderKind(sender) {
       if (sender?.id !== api.runtime.id) throw new Error('不接受外部调用');
@@ -372,6 +377,77 @@ if (typeof importScripts === 'function') importScripts('media.js');
       if (job.extension === 'gif') try { await offscreen({ type: 'releaseBlob', jobId: job.id }); } catch { /* No surviving offscreen document. */ }
     }
     api.downloads.onChanged.addListener(delta => { void downloadChanged(delta).catch(() => {}); });
+    const saveMergedFiles = () => mergedFileStore.set({mergedClipboardFiles:mergedFiles,activeMergedClipboardId:activeMergedFile});
+    function withMergedFileLock(operation) {
+      const result = mergedFileQueue.then(operation);
+      mergedFileQueue = result.catch(() => {});
+      return result;
+    }
+    async function cleanMergedFiles(limit) {
+      const keep = new Set(mergedFiles.filter(file => file.id === activeMergedFile || file.pendingUntil > now()).map(file => file.id));
+      for (const file of mergedFiles.slice().reverse()) {
+        if (keep.size < limit && now() - file.createdAt < 24 * 60 * 60 * 1000) keep.add(file.id);
+      }
+      for (const file of mergedFiles.slice()) {
+        if (keep.has(file.id)) continue;
+        try {
+          const [item] = await api.downloads.search({id:file.id});
+          const sameFile = item && (file.filename ? item.filename === file.filename : item.filename?.replace(/\\/g,'/').endsWith('/X/clipboard/'+file.leaf));
+          if (sameFile && item.exists !== false) {
+            if (item.state === 'in_progress') await api.downloads.cancel(file.id);
+            await api.downloads.removeFile(file.id);
+          }
+          mergedFiles = mergedFiles.filter(record => record.id !== file.id);
+        } catch { /* Keep ownership metadata and stop growth if cleanup fails. */ }
+      }
+      await saveMergedFiles();
+    }
+    async function stageMergedImage(message, sender) {
+      const prefix = 'data:image/png;base64,';
+      if (!/^\d{1,30}$/.test(message.postId) || typeof message.dataUrl !== 'string' ||
+          !message.dataUrl.startsWith(prefix) || message.dataUrl.length > prefix.length + 48 * 1024 ** 2) throw new Error('无损合图数据无效或超过 36 MiB');
+      const encoded = message.dataUrl.slice(prefix.length);
+      if (encoded.length < 44 || encoded.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw new Error('无损 PNG 数据无效');
+      const header = Uint8Array.from(atob(encoded.slice(0, 44)), char => char.charCodeAt(0));
+      const view = new DataView(header.buffer);
+      if (![137,80,78,71,13,10,26,10].every((value,index) => header[index] === value) ||
+          view.getUint32(8) !== 13 || String.fromCharCode(...header.slice(12,16)) !== 'IHDR') throw new Error('无损 PNG 数据无效');
+      const width = view.getUint32(16), height = view.getUint32(20);
+      if (!width || !height || width > 32767 || height > 32767 || width * height > 120000000) throw new Error('合图尺寸超过处理上限');
+      let downloadId;
+      try {
+        if (mergedFiles.some(file => file.pendingUntil > now())) throw new Error('另一张合图正在写入剪贴板，请稍后重试');
+        await cleanMergedFiles(2);
+        if (mergedFiles.length >= 3) throw new Error('合图缓存清理失败，请检查下载目录的文件权限后重试');
+        const leaf = `${message.postId}_${crypto.randomUUID()}.png`;
+        const id = await api.downloads.download({url:message.dataUrl,filename:`X/clipboard/${leaf}`,conflictAction:'uniquify',saveAs:false});
+        downloadId = id;
+        mergedFiles.push({id,createdAt:now(),tabId:sender.tab.id,leaf,pendingUntil:now()+120000});
+        await saveMergedFiles();
+        for (let attempt = 0; attempt < 300; attempt++) {
+          const [item] = await api.downloads.search({id});
+          if (item?.state === 'interrupted') throw new Error('无损合图文件保存中断，复制未完成');
+          if (item?.state === 'complete') {
+            const filename = item.filename?.replace(/\\/g, '/');
+            if (item.exists === false || !filename || filename.startsWith('//') || !/^(?:[a-z]:\/|\/)/i.test(filename)) throw new Error('无法取得合图的本地文件，复制未完成');
+            const pathname = filename.split('/').map(encodeURIComponent).join('/').replace(/^([a-z])%3A\//i, '$1:/');
+            mergedFiles.find(file => file.id === id).filename = item.filename;
+            await saveMergedFiles();
+            return {fileUrl:'file://' + (pathname.startsWith('/') ? '' : '/') + pathname, downloadId:id};
+          }
+          await new Promise(resolve => later(resolve,100));
+        }
+        throw new Error('等待无损合图文件保存超时，复制未完成');
+      } catch (error) {
+        const file = mergedFiles.find(record => record.id === downloadId);
+        if (file) {
+          delete file.pendingUntil;
+          try { await api.downloads.cancel(downloadId); } catch { /* It may already be complete. */ }
+          await saveMergedFiles();
+        }
+        throw error;
+      } finally { stagingMerged = false; }
+    }
     async function handle(message, sender) {
       const kind = senderKind(sender);
       await ready;
@@ -383,6 +459,19 @@ if (typeof importScripts === 'function') importScripts('media.js');
         return true;
       }
       if (message.type === 'getJobs') return jobs.filter(job => kind !== 'page' || job.tabId === sender.tab.id).map(job => ({ ...job }));
+      if (message.type === 'stageMergedImage' && kind === 'page') {
+        if (stagingMerged) throw new Error('正在准备另一张合图，请稍后重试');
+        stagingMerged = true;
+        return withMergedFileLock(() => stageMergedImage(message,sender)).finally(() => { stagingMerged = false; });
+      }
+      if (['confirmMergedCopy','releaseMergedCopy'].includes(message.type) && kind === 'page') return withMergedFileLock(async () => {
+        const file = mergedFiles.find(record => record.id === message.downloadId && record.tabId === sender.tab.id);
+        if (!file) throw new Error('合图缓存来源无效');
+        delete file.pendingUntil;
+        if (message.type === 'confirmMergedCopy') activeMergedFile = message.downloadId;
+        await cleanMergedFiles(3);
+        return true;
+      });
       if (['prepareImages', 'prefetchImages'].includes(message.type) && kind === 'page') return prepareImages(message.urls, imageOwner(sender, message.owner), message.type === 'prefetchImages');
       if (message.type === 'releaseImages' && kind === 'page') {
         const key = ownerKey(sender, message.owner);

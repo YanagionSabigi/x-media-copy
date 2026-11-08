@@ -61,4 +61,3 @@
 .x-copy-toast-error { background: #b42318; }
 .x-copy-toast button { display: block; margin-top: 10px; padding: 6px 12px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .x-copy-toast button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
-.x-copy-toast a[download] { display: block; margin-top: 10px; color: inherit; text-decoration: underline; }

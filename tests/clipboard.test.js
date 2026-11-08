@@ -4,6 +4,18 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
+test('local-file merged copy writes mixed HTML and text without a competing native image',async()=>{
+  let written;class ClipboardItem {constructor(formats){this.formats=formats;}}
+  const image={dataUrl:'data:image/png;base64,AAAA'};
+  const sandbox=vm.createContext({Blob,ClipboardItem,XCopyCore:require('../core.js'),navigator:{clipboard:{write:async items=>written=items}}});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../clipboard.js'),'utf8'),sandbox);
+  await sandbox.XCopyClipboard.writeText({original:'Text',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image,mergedImageFileUrl:'file:///C:/Downloads/X/clipboard/1.png'});
+  assert.deepEqual(Object.keys(written[0].formats),['text/plain','text/html']);
+  const html=await written[0].formats['text/html'].text();
+  assert.match(html,/file:\/\/\/C:\/Downloads\/X\/clipboard\/1.png/);assert.doesNotMatch(html,/base64/);
+  assert.equal(await written[0].formats['text/plain'].text(),'Text\nhttps://x.com/a/status/1');
+});
+
 test('GIF text copy writes the insertion line in plain and HTML clipboard records', async () => {
   let written;
   class ClipboardItem { constructor(formats) { this.formats = formats; } }
@@ -64,14 +76,16 @@ test('invalid merged PNG aborts the entire clipboard write', async () => {
   assert.equal(writes.length, 0);
 });
 
-test('large lossless merged PNG aborts before writing rather than letting QQ truncate the image and link', async () => {
+test('36 MiB merged PNG fits as Base64 HTML with text and source intact', async () => {
   const writes = [];
   class ClipboardItem { constructor(formats) { this.formats = formats; } }
   const image = {dataUrl:'data:image/png;base64,'+'A'.repeat(48*1024*1024)};
   const sandbox=vm.createContext({Blob,ClipboardItem,XCopyCore:require('../core.js'),navigator:{clipboard:{write:async items=>writes.push(items)}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../clipboard.js'),'utf8'),sandbox);
-  await assert.rejects(()=>sandbox.XCopyClipboard.writeText({original:'Text',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image}), error=>error.code==='MERGED_CLIPBOARD_TOO_LARGE' && /16 MiB/.test(error.message));
-  assert.equal(writes.length,0);
+  await sandbox.XCopyClipboard.writeText({original:'Text',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image});
+  assert.equal(writes.length,1);
+  assert.equal(await writes[0][0].formats['text/plain'].text(),'Text\nhttps://x.com/a/status/1');
+  assert.ok((await writes[0][0].formats['text/html'].text()).includes(image.dataUrl));
 });
 
 test('oversized lossless mixed HTML fails explicitly instead of dropping text or image in desktop chats', async () => {
@@ -80,6 +94,6 @@ test('oversized lossless mixed HTML fails explicitly instead of dropping text or
   const image = {dataUrl:'data:image/png;base64,'+'A'.repeat(50*1024*1024)};
   const sandbox=vm.createContext({Blob,ClipboardItem,XCopyCore:require('../core.js'),navigator:{clipboard:{write:async items=>writes.push(items)}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../clipboard.js'),'utf8'),sandbox);
-  await assert.rejects(()=>sandbox.XCopyClipboard.writeText({original:'Text',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image}),/16 MiB/);
+  await assert.rejects(()=>sandbox.XCopyClipboard.writeText({original:'Text',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image}),/50 MiB/);
   assert.equal(writes.length,0);
 });

@@ -8,13 +8,10 @@
       "text/plain": new Blob([payload.plain], { type: "text/plain" }),
       "text/html": new Blob([payload.html], { type: "text/html" })
     };
-    // Browser clipboard success does not imply QQ can consume large HTML.
-    // Keep a conservative mixed-paste bound; offer the lossless file separately.
-    if (data.mergedImage && formats['text/html'].size > 16 * 1024 * 1024) {
-      const error = new Error('无损合图的图文数据超过 16 MiB 兼容上限，未复制；可下载无损 PNG');
-      error.code = 'MERGED_CLIPBOARD_TOO_LARGE';
-      throw error;
-    }
+    // Keep text and HTML together. The receiver chooses the pasted format.
+    // This is a processing bound, not a QQ limit.
+    // 36 MiB PNG expands to 48 MiB Base64; reserve space for text and markup.
+    if (data.mergedImage && formats['text/html'].size > 50 * 1024 * 1024) throw new Error('无损合图的图文数据超过 50 MiB 处理上限；请用普通点击分别复制原图');
     await navigator.clipboard.write([new ClipboardItem(formats)]);
   }
   async function inspectImages(images) {

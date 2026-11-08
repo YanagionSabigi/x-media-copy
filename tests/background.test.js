@@ -3,12 +3,12 @@ const assert = require('node:assert/strict');
 const bg = require('../background.js');
 
 function setup(options = {}) {
-  const stored = {}, calls = [], notifications = [];
+  const stored = {...options.initialStorage}, calls = [], notifications = [];
   let listener, connectListener, removedListener;
   const api = {
     runtime: { onConnect: { addListener(fn) { connectListener = fn; } }, id: 'extension', getURL: path => `chrome-extension://extension/${path}`, getContexts: async () => [{ contextType: 'OFFSCREEN_DOCUMENT' }],
       sendMessage: async message => options.convert ? options.convert(message) : { ok: true, url: 'blob:chrome-extension://extension/test' } },
-    storage: { session: { get: async () => stored, set: async value => Object.assign(stored, value) } },
+    storage: { session: { get: async () => stored, set: async value => Object.assign(stored, value) }, local: { get: async () => stored, set: async value => Object.assign(stored, value) } },
     offscreen: { createDocument: async () => {} },
     tabs: { onRemoved: { addListener(fn) { removedListener = fn; } }, sendMessage: async (id, message) => notifications.push(message) },
     downloads: { download: async args => { calls.push(args); return calls.length; }, search: async () => [], cancel: async () => {}, onChanged: { addListener(fn) { listener = fn; } } }
@@ -18,6 +18,86 @@ function setup(options = {}) {
 }
 const page = { id: 'extension', tab: { id: 7 }, url: 'https://x.com/home' };
 const popup = { id: 'extension', url: 'chrome-extension://extension/popup.html' };
+
+const stagedPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==';
+test('stages the exact merged PNG and waits for its completed local file before returning an encoded URL', async () => {
+  const {service,api,calls}=setup({setTimeout:fn=>setTimeout(fn,0)});
+  let searches=0;
+  api.downloads.search=async()=>++searches===1?[{state:'in_progress'}]:[{state:'complete',exists:true,filename:'C:\\Downloads\\中文 #100%\\merged.png'}];
+  const result=await service.handle({type:'stageMergedImage',postId:'123',dataUrl:stagedPng},page);
+  assert.equal(calls.length,1);assert.equal(calls[0].url,stagedPng);
+  assert.match(calls[0].filename,/^X\/clipboard\/123_[\w-]+\.png$/);
+  assert.equal(calls[0].saveAs,false);assert.equal(searches,2);
+  assert.equal(result.fileUrl,'file:///C:/Downloads/%E4%B8%AD%E6%96%87%20%23100%25/merged.png');
+});
+
+test('merged staging rejects non-PNG, oversized data, invalid identity and non-page senders before downloading', async () => {
+  const {service,calls}=setup();
+  for(const dataUrl of ['https://evil.test/a.png','data:image/jpeg;base64,AAAA','data:image/png;base64,AAAA','data:image/png;base64,'+'A'.repeat(48*1024*1024+4)]){
+    await assert.rejects(service.handle({type:'stageMergedImage',postId:'123',dataUrl},page));
+  }
+  await assert.rejects(service.handle({type:'stageMergedImage',postId:'../bad',dataUrl:stagedPng},page));
+  await assert.rejects(service.handle({type:'stageMergedImage',postId:'123',dataUrl:stagedPng},popup));
+  assert.equal(calls.length,0);
+});
+
+test('interrupted merged file cannot be reported as ready for copying', async () => {
+  const {service,api}=setup();
+  api.downloads.search=async()=>[{state:'interrupted',error:'FILE_FAILED'}];
+  await assert.rejects(service.handle({type:'stageMergedImage',postId:'123',dataUrl:stagedPng},page),/失败|中断/);
+});
+
+test('merged clipboard cache retains at most three owned files and protects the currently copied file',async()=>{
+  let clock=1000;const removed=[];
+  const {service,api}=setup({now:()=>clock});
+  api.downloads.search=async({id})=>[{id,state:'complete',exists:true,filename:`C:\\Downloads\\X\\clipboard\\${id}.png`}];
+  api.downloads.removeFile=async id=>removed.push(id);
+  const request={type:'stageMergedImage',postId:'123',dataUrl:stagedPng};
+  const first=await service.handle(request,page);
+  await service.handle({type:'confirmMergedCopy',downloadId:first.downloadId},page);
+  for(let i=0;i<4;i++){clock++;const file=await service.handle(request,page);await service.handle({type:'releaseMergedCopy',downloadId:file.downloadId},page)}
+  assert.deepEqual(removed,[2,3]);
+  let saved=await api.storage.local.get('mergedClipboardFiles');
+  assert.equal(saved.mergedClipboardFiles.length,3);
+  assert.ok(saved.mergedClipboardFiles.some(file=>file.id===1));
+  clock+=25*60*60*1000;
+  await service.handle(request,page);
+  saved=await api.storage.local.get('mergedClipboardFiles');
+  assert.deepEqual(saved.mergedClipboardFiles.map(file=>file.id),[1,6]);
+  assert.ok(!removed.includes(1));
+});
+
+test('failed cleanup prevents creating more merged files instead of growing the cache without bound',async()=>{
+  const {service,api,calls}=setup();
+  api.downloads.search=async({id})=>[{id,state:'complete',exists:true,filename:`C:\\Downloads\\X\\clipboard\\${id}.png`}];
+  api.downloads.removeFile=async()=>{throw new Error('access denied')};
+  for(let i=0;i<3;i++){const file=await service.handle({type:'stageMergedImage',postId:'123',dataUrl:stagedPng},page);await service.handle({type:'releaseMergedCopy',downloadId:file.downloadId},page)}
+  await assert.rejects(service.handle({type:'stageMergedImage',postId:'123',dataUrl:stagedPng},page),/清理/);
+  assert.equal(calls.length,3);
+});
+
+test('another tab cannot evict a staged PNG while its clipboard write is pending',async()=>{
+  const {service,api,calls}=setup();
+  api.downloads.search=async({id})=>[{id,state:'complete',filename:`C:\\Downloads\\X\\clipboard\\${id}.png`}];
+  const request={type:'stageMergedImage',postId:'123',dataUrl:stagedPng};
+  const first=await service.handle(request,page);
+  await assert.rejects(service.handle(request,{...page,tab:{id:8}}),/复制|合图/);
+  assert.equal(calls.length,1);
+  await service.handle({type:'confirmMergedCopy',downloadId:first.downloadId},page);
+  const second=await service.handle(request,page);
+  await service.handle({type:'releaseMergedCopy',downloadId:second.downloadId},page);
+  await service.handle(request,page);
+  assert.equal(calls.length,3);
+});
+
+test('cache cleanup never deletes a different file when a stored download identity no longer matches',async()=>{
+  const removed=[];
+  const {service,api}=setup({now:()=>100000000,initialStorage:{mergedClipboardFiles:[{id:99,createdAt:1,filename:'C:\\Downloads\\X\\clipboard\\owned.png'}]}});
+  api.downloads.removeFile=async id=>removed.push(id);
+  api.downloads.search=async({id})=>[{id,state:'complete',exists:true,filename:id===99?'C:\\Downloads\\important.png':'C:\\Downloads\\X\\clipboard\\new.png'}];
+  await service.handle({type:'stageMergedImage',postId:'123',dataUrl:stagedPng},page);
+  assert.deepEqual(removed,[]);
+});
 
 test('the default slim GIF recipe serializes conversions and deduplicates identical requests', async () => {
   const conversions = []; let active = 0, peak = 0;
