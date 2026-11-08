@@ -172,3 +172,20 @@ test('profile capture keeps the original when no translation exists and never cl
   assert.equal(clicks, 0, 'controls outside the profile header must be ignored');
   dom.window.close();
 });
+
+test('profile capture ignores the inline translation failure notice', async () => {
+  const dom = new JSDOM(`<div id="profile">
+      <div data-testid="UserName"><span>rabi</span><span>@rabiadraw</span></div>
+      <div data-testid="UserDescription">Original bio</div>
+      <div><button id="tr">显示翻译</button></div>
+    </div>`, { url: 'https://x.com/rabiadraw/media' });
+  const document = dom.window.document, button = document.querySelector('#tr');
+  button.addEventListener('click', () => {
+    document.querySelector('[data-testid="UserDescription"]').textContent = '翻译失败，请重试';
+    button.textContent = '显示原文';
+  });
+  const result = await extractor.captureProfile(document.querySelector('#profile'), { timeoutMs: 600, settleMs: 10 });
+  assert.equal(result.bio, 'Original bio');
+  assert.equal(result.bioTranslation, '');
+  dom.window.close();
+});

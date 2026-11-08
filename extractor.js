@@ -159,8 +159,10 @@
         showTranslation.click();
         bioTranslation = await waitForValue(() => {
           const value = read();
-          return value && value !== bio ? value : "";
-        }, timeoutMs, settleMs);
+          // Ignore X's inline failure notice: a profile copy should not treat
+          // "翻译失败" or "正在翻译" as the introduction.
+          return value && value !== bio && !metadata.test(value) && !/^(?:翻译失败|无法翻译|重试|translation failed|try again)/i.test(value) ? value : "";
+        }, Math.min(timeoutMs, 6000), settleMs);
       }
     }
     return { ...profileIdentity(scope), bio, bioTranslation };
