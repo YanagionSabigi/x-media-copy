@@ -114,7 +114,8 @@
     }
     const body = [head, original, translated].filter(Boolean).map(htmlText).join('<br><br>');
     const link = url ? `<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>` : '';
-    return { plain, html: `<div>${[body, imageHtml, link].filter(Boolean).join('<br><br>')}</div>` };
+    // The profile link reads as the source line; the images follow it.
+    return { plain, html: `<div>${[body, link, imageHtml].filter(Boolean).join('<br><br>')}</div>` };
   }
 
   const api = { cleanText, stripHashtags, canonicalPostUrl, canonicalProfileUrl, buildClipboardPayload, buildProfilePayload };

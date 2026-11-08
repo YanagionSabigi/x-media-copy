@@ -127,7 +127,8 @@ test('profile payload lists the author block, bio, translation, page link and im
   });
   assert.equal(result.plain, 'rabi 🌸\n@rabiadraw\n\nI draw whatever I like at the moment. NO A*I.\n\n我画当下喜欢的任何东西。不用AI。\n\nhttps://x.com/rabiadraw');
   assert.match(result.html, /^<div>rabi 🌸<br>@rabiadraw<br><br>I draw whatever I like at the moment\. NO A\*I\.<br><br>我画当下喜欢的任何东西。不用AI。/);
-  assert.match(result.html, /不用AI。[\s\S]*<br><br><a href="https:\/\/x\.com\/rabiadraw">/);
+  assert.match(result.html, /不用AI。<br><br><a href="https:\/\/x\.com\/rabiadraw">/);
+  assert.ok(result.html.indexOf('<a href="https://x.com/rabiadraw">') < result.html.indexOf('<img'), 'the profile link precedes the images');
   assert.equal((result.html.match(/<img/g) || []).length, 2);
 });
 

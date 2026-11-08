@@ -189,3 +189,43 @@ test('profile capture ignores the inline translation failure notice', async () =
   assert.equal(result.bioTranslation, '');
   dom.window.close();
 });
+
+test('profile capture fails clearly when the original bio cannot be revealed', async () => {
+  const dom = new JSDOM(`<div id="profile">
+      <div data-testid="UserName"><span>rabi</span><span>@rabiadraw</span></div>
+      <div data-testid="UserDescription">中文简介</div>
+      <div><span>翻译自 英语</span><button id="show">显示原文</button></div>
+    </div>`, { url: 'https://x.com/rabiadraw/media' });
+  try {
+    await assert.rejects(extractor.captureProfile(dom.window.document.querySelector('#profile'), { timeoutMs: 300, settleMs: 10 }), /简介原文/);
+  } finally { dom.window.close(); }
+});
+
+test('profile capture refuses to pass a translation off as the original', async () => {
+  const dom = new JSDOM(`<div id="profile">
+      <div data-testid="UserName"><span>rabi</span><span>@rabiadraw</span></div>
+      <div data-testid="UserDescription">中文简介</div>
+      <div><span>翻译自 英语</span></div>
+    </div>`, { url: 'https://x.com/rabiadraw/media' });
+  try {
+    await assert.rejects(extractor.captureProfile(dom.window.document.querySelector('#profile'), { timeoutMs: 200, settleMs: 10 }), /简介原文/);
+  } finally { dom.window.close(); }
+});
+
+test('profile capture strips the translation attribution from the bio text', async () => {
+  const dom = new JSDOM(`<div id="profile">
+      <div data-testid="UserName"><span>rabi</span><span>@rabiadraw</span></div>
+      <div data-testid="UserDescription">中文简介<br>翻译自 英语</div>
+      <div><button id="show">显示原文</button></div>
+    </div>`, { url: 'https://x.com/rabiadraw/media' });
+  const document = dom.window.document, bio = document.querySelector('[data-testid="UserDescription"]');
+  document.querySelector('#show').addEventListener('click', function () {
+    bio.textContent = 'English bio';
+    this.textContent = '翻译';
+  });
+  try {
+    const result = await extractor.captureProfile(document.querySelector('#profile'), { timeoutMs: 1000, settleMs: 10 });
+    assert.equal(result.bio, 'English bio');
+    assert.equal(result.bioTranslation, '中文简介');
+  } finally { dom.window.close(); }
+});

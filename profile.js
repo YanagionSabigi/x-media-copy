@@ -12,7 +12,7 @@
   const selected = new Map();
   const contextError = error => invalidated || /extension context (?:was )?invalidated/i.test(error?.message || "");
   let invalidated = false, mode = false, busy = false, toolbar, countNode, copyNode, toggleNode;
-  let scanScheduled = false, scanTimer;
+  let scanScheduled = false, scanTimer, activeHandle = "";
 
   function assertContext() {
     try {
@@ -26,9 +26,14 @@
 
   async function send(message) {
     assertContext();
-    const response = await chrome.runtime.sendMessage(message);
-    if (!response?.ok) throw new Error(response?.error || "扩展后台没有响应，请重新加载扩展和 X 页面");
-    return response.data;
+    try {
+      const response = await chrome.runtime.sendMessage(message);
+      if (!response?.ok) throw new Error(response?.error || "扩展后台没有响应，请重新加载扩展和 X 页面");
+      return response.data;
+    } catch (error) {
+      if (contextError(error)) invalidated = true;
+      throw error;
+    }
   }
 
   function toast(message, isError = false) {
@@ -47,6 +52,10 @@
     if (contextError(error)) {
       invalidated = true;
       teardown();
+    }
+    if (!contextError(error) && /document is not focused/i.test(error?.message || "")) {
+      toast("复制未完成：请回到 X，点击页面空白处后再点复制；看到“已复制，可粘贴”后再切换窗口。", true);
+      return;
     }
     toast(error?.message || "复制失败", true);
   }
@@ -134,6 +143,7 @@
     toggleNode.className = "x-copy-select-toggle";
     toggleNode.textContent = "多选";
     toggleNode.addEventListener("click", () => {
+      if (busy) { toast("正在复制，请稍候"); return; }
       mode = !mode;
       if (!mode) selected.clear();
       paint();
@@ -178,15 +188,27 @@
     busy = false;
     selected.clear();
     document.documentElement.classList.remove("x-copy-selecting");
+    for (const tile of mediaTiles()) {
+      tile.classList.remove("x-copy-tile-selected");
+      overlayOf(tile)?.remove();
+    }
     toolbar?.remove();
     toolbar = countNode = copyNode = toggleNode = null;
+    activeHandle = "";
   }
 
   function refresh() {
     if (invalidated) return;
-    if (!mediaHandle() || !document.documentElement) {
-      if (toolbar) teardown();
+    const handle = mediaHandle();
+    if (!handle || !document.documentElement) {
+      if (toolbar || selected.size) teardown();
       return;
+    }
+    // Switching authors keeps the same URL shape; a new handle invalidates the
+    // old selection instead of pasting one author's images under another's bio.
+    if (handle !== activeHandle) {
+      teardown();
+      activeHandle = handle;
     }
     ensureToolbar();
     paint();
@@ -240,15 +262,29 @@
     if (busy || !selected.size) return;
     const handle = mediaHandle();
     if (!handle) return;
+    // Snapshot the batch before the awaited reads: leaving selection mode or
+    // clearing the grid must not shrink the clipboard record.
+    const entries = [...selected.values()];
     const owner = `profile_${globalThis.crypto?.randomUUID?.() || Date.now()}`;
     busy = true;
     paint();
     try {
       toast("正在读取作者介绍，请保持此页激活");
       const author = await extractor.captureProfile(profileScope(), {});
-      const entries = [...selected.values()];
-      const urls = entries.flatMap(entry => entry.urls);
+      if (mediaHandle() !== handle) throw new Error("页面已切换，请重新选择要复制的帖子");
+      const urls = [];
+      for (const entry of entries) {
+        // The captured post data can arrive after the tile was selected; use it
+        // to complete multi-photo posts instead of copying one photo of four.
+        const record = globalThis.XCopyMediaIndex?.get(entry.postId);
+        const photos = Array.isArray(record)
+          ? record.filter(item => item?.type === "photo" && item.url).map(item => originalImageUrl(item.url)).filter(Boolean)
+          : [];
+        urls.push(...(photos.length > entry.urls.length ? photos : entry.urls));
+      }
+      if (urls.length > LIMIT) throw new Error(`补齐多图帖子后共 ${urls.length} 张，超过 20 张上限；请先取消一些帖子`);
       const images = await readImages(urls, owner);
+      if (mediaHandle() !== handle) throw new Error("页面已切换，请重新选择要复制的帖子");
       assertContext();
       await clipboard.writeProfile({
         name: author.name,
@@ -271,10 +307,13 @@
   document.addEventListener("click", event => {
     if (!mode) return;
     const tile = event.target?.closest?.('a[href*="/status/"]');
-    if (!tile || !isTile(tile)) return;
+    if (!tile || !TILE_HREF.test(tile.getAttribute("href") || "")) return;
+    // Block navigation for every media tile, including video posters that
+    // cannot be copied, so one stray click cannot discard the whole selection.
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation?.();
+    if (!isTile(tile)) { toast("这个帖子没有可复制的静态图片", true); return; }
     toggleTile(tile);
   }, true);
 

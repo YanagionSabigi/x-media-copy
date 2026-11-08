@@ -109,10 +109,12 @@
 
   // Profile header controls live outside any <article>, so they need the same
   // label matching without the post-ownership rules.
+  const profileTranslate = /^(?:翻译|翻譯|translate)$/i;
   function profileControl(scope, type) {
+    const pattern = type === "translation" ? new RegExp(`(?:${labels.translation.source})|(?:${profileTranslate.source})`, "i") : labels[type];
     const matches = [...scope.querySelectorAll('button, [role="button"], a, span, div')].filter(node => {
       const values = [node.textContent || "", node.getAttribute("aria-label") || ""];
-      if (!values.some(value => value.length < 100 && labels[type].test(value.replace(/\s+/g, " ").trim()))) return false;
+      if (!values.some(value => value.length < 100 && pattern.test(value.replace(/\s+/g, " ").trim()))) return false;
       return visible(node);
     });
     const node = matches.find(candidate => !matches.some(other => other !== candidate && candidate.contains(other)));
@@ -129,7 +131,20 @@
 
   function profileBio(scope) {
     const node = scope.querySelector('[data-testid="UserDescription"]');
-    return node ? text(node) : "";
+    if (!node) return "";
+    // The attribution ("翻译自 英语") and the toggle labels can sit inside the
+    // description container; they are chrome, not part of the introduction.
+    return core.cleanText(String(text(node)).split("\n").filter(line => {
+      const value = line.trim();
+      return !value || !(metadata.test(value) || labels.original.test(value) || labels.translation.test(value) || profileTranslate.test(value));
+    }).join("\n"));
+  }
+
+  function bioTranslated(scope) {
+    return [...scope.querySelectorAll("span, div")].some(node => {
+      const value = (node.textContent || "").trim();
+      return value.length < 60 && /^(?:翻译自|翻譯自|translated (?:by|from)|translation by|由.{0,30}翻[译譯])/i.test(value) && visible(node);
+    });
   }
 
   // X shows either the original bio or its translation; the requested output
@@ -146,11 +161,16 @@
         const value = read();
         return value && value !== bioTranslation ? value : "";
       }, timeoutMs, settleMs);
+      // Copying the translation in place of the original would silently drop
+      // the text the user asked for, so stop and ask them to reveal it.
+      if (!bio) throw new Error("未能读取简介原文，请点页面上的「显示原文」后重试");
       const showTranslation = profileControl(scope, "translation");
       if (showTranslation) {
         showTranslation.click();
         await waitForValue(() => (read() === bioTranslation ? bioTranslation : ""), Math.min(timeoutMs, 4000), settleMs);
       }
+    } else if (bioTranslated(scope)) {
+      throw new Error("未能读取简介原文，请点页面上的「显示原文」后重试");
     } else {
       bio = bioTranslation;
       bioTranslation = "";

@@ -254,6 +254,77 @@ test("stops before writing when the selected originals exceed the total budget",
   } finally { setup.dom.window.close(); }
 });
 
+test("switching to another author's media tab clears the selection", async () => {
+  const setup = profileFixture({ html: header() + tile(101, "A") });
+  try {
+    setup.toggle().click(); await tick(0);
+    setup.tiles()[0].dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await tick(0);
+    assert.match(setup.count(), /已选 1 张图/);
+    setup.dom.window.history.pushState({}, "", "/someoneelse/media");
+    setup.dom.window.dispatchEvent(new setup.dom.window.Event("popstate"));
+    await tick(0);
+    assert.match(setup.count(), /已选 0 张图 \/ 0 帖/);
+    assert.equal(setup.toggle().textContent, "多选");
+    assert.equal(setup.document.querySelectorAll(".x-copy-tile-check").length, 0, "tile overlays are removed");
+  } finally { setup.dom.window.close(); }
+});
+
+test("leaving selection mode during a copy keeps the snapshotted images", async () => {
+  const setup = profileFixture({
+    html: header() + tile(101, "A") + tile(102, "B") + tile(102, "C", 2),
+    records: [
+      { postId: 101, media: [{ type: "photo", url: ORIG("A") }] },
+      { postId: 102, media: ["B", "C"].map(key => ({ type: "photo", url: ORIG(key) })) }
+    ],
+    message: request => request.urls.map(url => ({ url, dataUrl: "data:image/jpeg;base64,AAAA", size: 10 }))
+  });
+  try {
+    setup.toggle().click(); await tick(0);
+    const click = node => node.dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    click(setup.tiles()[0]); await tick(0);
+    click(setup.tiles()[1]); await tick(0);
+    setup.copyButton().click();
+    setup.toggle().click();
+    await until(() => setup.writes.length);
+    assert.equal(setup.writes.length, 1);
+    assert.equal((setup.writes[0].html.match(/<img/g) || []).length, 3, "the copy list is snapshotted before the awaited reads");
+  } finally { setup.dom.window.close(); }
+});
+
+test("clicking a video tile while selecting does not navigate or clear the selection", async () => {
+  const video = '<a href="https://x.com/rabiadraw/status/102/video/1"><img src="https://pbs.twimg.com/ext_tw_video_thumb/9/pu/img/x.jpg"></a>';
+  const setup = profileFixture({ html: header() + tile(101, "A") + video });
+  try {
+    let navigations = 0;
+    setup.document.querySelector('a[href*="/video/1"]').addEventListener("click", () => navigations++);
+    setup.toggle().click(); await tick(0);
+    const click = node => node.dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    click(setup.tiles()[0]); await tick(0);
+    click(setup.document.querySelector('a[href*="/video/1"]')); await tick(0);
+    assert.equal(navigations, 0);
+    assert.match(setup.document.querySelector(".x-copy-toast-error").textContent, /没有可复制的静态图片/);
+    assert.match(setup.count(), /已选 1 张图/, "the existing selection survives");
+  } finally { setup.dom.window.close(); }
+});
+
+test("the profile link comes before the images in the copied HTML", async () => {
+  const setup = profileFixture({
+    html: header() + tile(101, "A"),
+    records: [{ postId: 101, media: [{ type: "photo", url: ORIG("A") }] }],
+    message: request => request.urls.map(url => ({ url, dataUrl: "data:image/jpeg;base64,AAAA", size: 10 }))
+  });
+  try {
+    setup.toggle().click(); await tick(0);
+    setup.tiles()[0].dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await tick(0);
+    setup.copyButton().click();
+    await until(() => setup.writes.length || setup.document.querySelector(".x-copy-toast-error"));
+    const html = setup.writes[0].html;
+    assert.ok(html.indexOf('href="https://x.com/rabiadraw"') < html.indexOf("<img"), "link first, then the images");
+  } finally { setup.dom.window.close(); }
+});
+
 test("leaving the media tab removes the toolbar and clears the selection", async () => {
   const setup = profileFixture({ html: header() + tile(101, "A") });
   try {
