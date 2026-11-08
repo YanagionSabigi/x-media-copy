@@ -667,6 +667,32 @@ test('Shift merge failure leaves clipboard and like untouched and button can be 
   } finally { setup.dom.window.close(); }
 });
 
+test('oversized Shift merge offers the exact lossless PNG and a separate text/source copy without claiming success or liking', async () => {
+  const image = { dataUrl: 'data:image/png;base64,TUVSR0VE', width: 5727, height: 2892 };
+  const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {
+    media: true, mergeImages: async () => [image],
+    beforeWrite: data => { if (data.mergedImage) { const error = new Error('超过 QQ 图文兼容上限'); error.code = 'MERGED_CLIPBOARD_TOO_LARGE'; throw error; } },
+    message: request => request.urls ? imageResult(request) : true
+  });
+  try {
+    setup.document.querySelector('.x-copy-post-button').dispatchEvent(new setup.dom.window.MouseEvent('click', { shiftKey: true }));
+    await tick(30);
+    assert.equal(setup.writes.length, 0); assert.equal(setup.likes.length, 0);
+    const notice = setup.document.querySelector('.x-copy-toast-error');
+    assert.match(notice.textContent, /未复制/); assert.doesNotMatch(notice.textContent, /已复制/);
+    const download = notice.querySelector('a[download]');
+    assert.equal(download.href, image.dataUrl); assert.equal(download.download, '1_merged.png');
+    const copy = notice.querySelector('button');
+    copy.click(); await tick(10);
+    assert.equal(setup.writes.length, 1);
+    assert.equal(setup.writes[0].plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
+    assert.doesNotMatch(setup.writes[0].html, /<img/);
+    assert.equal(setup.likes.length, 0); assert.ok(download.isConnected);
+    setup.visibility(true);
+    assert.equal(download.isConnected, false);
+  } finally { setup.dom.window.close(); }
+});
+
 test('Alt+Shift merges while omitting translation; ordinary and Alt clicks retain separate photos', async () => {
   const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {
     media: true, mergeImages: async () => [{ dataUrl: 'data:image/png;base64,TUVSR0VE' }],

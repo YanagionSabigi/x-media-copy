@@ -56,7 +56,7 @@
     return escapeHtml(value).replace(/\n/g, "<br>");
   }
 
-  function buildClipboardPayload({ original, translation, postUrl, images = [], reserveGifLine = false }) {
+  function buildClipboardPayload({ original, translation, postUrl, images = [], reserveGifLine = false, mergedImage = null }) {
     original = stripHashtags(original);
     translation = stripHashtags(translation);
     postUrl = canonicalPostUrl(postUrl);
@@ -77,6 +77,7 @@
     }
     const body = htmlSections.join('<br><br>');
     const link = postUrl ? `<a href="${escapeHtml(postUrl)}">${escapeHtml(postUrl)}</a>` : '';
+    if (mergedImage) return { plain, html: `<div>${[body, link, imageHtml].filter(Boolean).join('<br>')}</div>` };
     const content = [body, imageHtml].filter(Boolean).join('<br>');
     return { plain, html: `<div>${[content, link].filter(Boolean).join(reserveGifLine ? '<br><br>' : '<br>')}</div>` };
   }

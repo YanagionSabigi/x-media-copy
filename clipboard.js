@@ -8,11 +8,13 @@
       "text/plain": new Blob([payload.plain], { type: "text/plain" }),
       "text/html": new Blob([payload.html], { type: "text/html" })
     };
-    // Keep one mixed representation. A native PNG alternative makes QQ pick
-    // just the image and ignore text. Allow Base64 expansion of large merged
-    // PNGs; the previous 16 MiB HTML cap rejected valid split-image posts.
-    // 36 MiB PNG expands to 48 MiB Base64; reserve space for text and markup.
-    if (data.mergedImage && formats['text/html'].size > 50 * 1024 * 1024) throw new Error('无损合图的图文数据超过 50 MiB 处理上限；请用普通点击分别复制原图');
+    // Browser clipboard success does not imply QQ can consume large HTML.
+    // Keep a conservative mixed-paste bound; offer the lossless file separately.
+    if (data.mergedImage && formats['text/html'].size > 16 * 1024 * 1024) {
+      const error = new Error('无损合图的图文数据超过 16 MiB 兼容上限，未复制；可下载无损 PNG');
+      error.code = 'MERGED_CLIPBOARD_TOO_LARGE';
+      throw error;
+    }
     await navigator.clipboard.write([new ClipboardItem(formats)]);
   }
   async function inspectImages(images) {

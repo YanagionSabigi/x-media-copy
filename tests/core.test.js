@@ -90,6 +90,13 @@ test('HTML embeds original bytes before the source link without changing plain t
   assert.doesNotMatch(result.html, /width="1600"/);
 });
 
+test('merged copy places the source before large image data so a receiver cannot truncate it with the image', () => {
+  const image = { dataUrl: 'data:image/png;base64,AAAA' };
+  const result = core.buildClipboardPayload({ original: 'Source', translation: '译文', postUrl: 'https://x.com/a/status/1', images: [image], mergedImage: image });
+  assert.equal(result.plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
+  assert.match(result.html, /译文<br><a [^>]+>https:\/\/x.com\/a\/status\/1<\/a><br><img/);
+});
+
 test('compact layout has one blank line only between languages and no breaks between images', () => {
   const images = ['AAAA','BBBB','CCCC'].map(value => ({ dataUrl: `data:image/png;base64,${value}` }));
   const result = core.buildClipboardPayload({ original: 'Source', translation: '中文', postUrl: 'https://x.com/a/status/1?s=20', images });

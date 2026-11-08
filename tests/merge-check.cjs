@@ -3,8 +3,8 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises'), http = require('node:http'), path = require('node:path'), os = require('node:os');
 const root = path.resolve(__dirname, '..');
 const server = http.createServer(async (req, res) => {
-  if (['/image-merge.js', '/core.js', '/clipboard.js'].includes(req.url)) {
-    res.setHeader('Content-Type', 'text/javascript');
+  if (['/image-merge.js', '/core.js', '/clipboard.js', '/content.js', '/extractor.js', '/media.js'].includes(req.url)) {
+    res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
     res.end(await fs.readFile(path.join(root, req.url)).catch(() => ''));
   } else res.end('<!doctype html><div id="paste-target" contenteditable></div><script src="/core.js"></script><script src="/clipboard.js"></script><script src="/image-merge.js"></script>');
 });
@@ -87,6 +87,46 @@ let browser, socket;
     return {cases:reports,corruptInputRejected:rejected,mixedClipboard:{types:item.types,images:1,pngSize:[300,180],textAndSource:true}};
   })()`);
   console.log(JSON.stringify(result, null, 2));
+  const qqArg = process.argv.indexOf('--qq-download-sample-dir');
+  if (qqArg >= 0) {
+    const directory = path.resolve(process.argv[qqArg + 1]);
+    const downloadDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'xcopy-lossless-download-'));
+    await call('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDirectory });
+    const inputs = await Promise.all([1,2,3,4].map(async n => ({dataUrl:'data:image/jpeg;base64,'+(await fs.readFile(path.join(directory,n+'.jpg'))).toString('base64')})));
+    const expected = await evaluate(`(async()=>{
+      const inputs=${JSON.stringify(inputs)};
+      const images=await XCopyImageMerge.mergeImages(inputs);
+      globalThis.qqExpected=images[0];
+      await XCopyClipboard.writeText({original:'clipboard sentinel'});
+      document.body.innerHTML='<article><div data-testid="tweetText">Source</div><a href="https://x.com/a/status/2119234009901543927"><time>now</time></a><div role="group"><button data-testid="like">Like</button><button data-testid="share">Share</button></div></article>';
+      globalThis.qqLikes=0; document.querySelector('[data-testid="like"]').onclick=()=>qqLikes++;
+      globalThis.chrome={runtime:{id:'test-extension',getManifest:()=>({}),sendMessage:async request=>({ok:true,data:request.urls?inputs:true}),onMessage:{addListener(){}}}};
+      for(const file of ['extractor.js','media.js']) await new Promise((resolve,reject)=>{const s=document.createElement('script');s.src='/'+file;s.onload=resolve;s.onerror=reject;document.body.append(s)});
+      XCopyMedia.collectDom=()=>inputs.map((_,i)=>({type:'photo',url:'https://pbs.twimg.com/media/SAMPLE'+i+'.jpg'}));
+      XCopyImageMerge.mergeImages=async()=>images;
+      await new Promise((resolve,reject)=>{const s=document.createElement('script');s.src='/content.js';s.onload=resolve;s.onerror=reject;document.body.append(s)});
+      document.querySelector('.x-copy-post-button').dispatchEvent(new MouseEvent('click',{shiftKey:true,altKey:true}));
+      return images[0].dataUrl;
+    })()`);
+    await waitFor(()=>evaluate('!!document.querySelector(".x-copy-toast-download a[download]")'));
+    const notice=await evaluate(`(async()=>{
+      const node=document.querySelector('.x-copy-toast-download'),a=node.querySelector('a');
+      const [item]=await navigator.clipboard.read();
+      if(await(await item.getType('text/plain')).text()!=='clipboard sentinel')throw new Error('Oversized copy changed the clipboard');
+      if(qqLikes!==0||!node.textContent.includes('未复制'))throw new Error('Oversized copy falsely reported success: '+JSON.stringify({likes:qqLikes,message:node.textContent}));
+      if(a.href!==qqExpected.dataUrl)throw new Error('Download bytes differ from lossless output');
+      a.click();node.querySelector('button').click();
+      return {filename:a.download,message:node.textContent};
+    })()`);
+    const output=path.join(downloadDirectory,notice.filename);
+    await waitFor(()=>fs.stat(output).then(()=>true).catch(()=>false));
+    const bytes=await fs.readFile(output);
+    if(!bytes.equals(Buffer.from(expected.split(',')[1],'base64')))throw new Error('Downloaded PNG changed');
+    await waitFor(()=>evaluate('document.querySelector(".x-copy-toast-download button").textContent.includes("已复制文案和出处")'));
+    const plain=await evaluate(`(async()=>{const [item]=await navigator.clipboard.read();return(await(await item.getType('text/plain')).text()).replaceAll(String.fromCharCode(13),'')})()`);
+    if(plain!=='Source\nhttps://x.com/a/status/2119234009901543927')throw new Error('Separate copy lost source');
+    console.log(JSON.stringify({qqOversizeFallback:{...notice,bytes:bytes.length,exactPngBytes:true,clipboardUnchangedUntilExplicitCopy:true,plain}},null,2));
+  }
   const clipboardArg = process.argv.indexOf('--clipboard-sample-dir');
   if (clipboardArg >= 0) {
     const directory = path.resolve(process.argv[clipboardArg + 1]);
@@ -163,4 +203,4 @@ let browser, socket;
   }
   await call('Browser.close');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => { socket?.close(); browser?.kill(); server.close(); });
-setTimeout(() => { browser?.kill(); console.error('Merge check exceeded its time limit'); process.exit(1); }, process.argv.includes('--hold-clipboard') ? 240000 : 30000).unref();
+setTimeout(() => { browser?.kill(); console.error('Merge check exceeded its time limit'); process.exit(1); }, process.argv.includes('--hold-clipboard') ? 240000 : 60000).unref();

@@ -239,6 +239,7 @@
   }
   function resetImageState(resume) {
     imageEpoch++;
+    document.querySelector('.x-copy-toast-download')?.remove();
     for (const slot of pendingCopies) discardImageRead(slot);
     for (const key of preparedImages.keys()) dropEntry(key);
     for (const value of candidates.values()) clearTimeout(value.dwell);
@@ -277,6 +278,28 @@
     copying = true;
     try { return await operation(); }
     finally { copying = false; schedulePrefetch(); }
+  }
+  function offerMergedDownload(image, data, postUrl, epoch) {
+    const node = toast('未复制：无损合图的图文数据过大，QQ 可能丢失图片和出处。请下载 PNG 后作为文件发送；文案和出处可单独复制。', true, true);
+    node.classList.add('x-copy-toast-download');
+    const download = document.createElement('a');
+    download.textContent = '下载无损合成图 PNG';
+    download.download = `${postUrl.match(/\/status\/(\d+)/)?.[1] || 'post'}_merged.png`;
+    download.href = image.dataUrl;
+    node.append(download);
+    const texts = { original: data.original, translation: data.translation, postUrl };
+    const copy = document.createElement('button');
+    copy.type = 'button'; copy.textContent = '复制文案和出处';
+    copy.addEventListener('click', async () => {
+      copy.disabled = true;
+      try {
+        assertPage(epoch);
+        await clipboard.writeText(texts);
+        copy.textContent = '已复制文案和出处，请另行发送 PNG 文件';
+      } catch (error) { showError(error); }
+      finally { copy.disabled = false; }
+    });
+    node.append(copy);
   }
   function findPost(postUrl) {
     if (!postUrl) return null;
@@ -320,7 +343,15 @@
     } else if (clipboard.inspectImages) images = await clipboard.inspectImages(images);
     assertPage(epoch);
     const imageCount = images.length;
-    await clipboard.writeText({ ...data, images, mergedImage: merging ? images[0] : null });
+    try { await clipboard.writeText({ ...data, images, mergedImage: merging ? images[0] : null }); }
+    catch (error) {
+      if (merging && error.code === 'MERGED_CLIPBOARD_TOO_LARGE') {
+        assertPage(epoch);
+        offerMergedDownload(images[0], data, sourcePostUrl, epoch);
+        return;
+      }
+      throw error;
+    }
     // The system clipboard owns its data now; do not pin a large temporary
     // copy while waiting for like confirmation or optional media resolution.
     images = null;

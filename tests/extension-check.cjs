@@ -31,6 +31,7 @@ async function waitFor(fn, timeout = 20000) { const start = Date.now(); while (D
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
+  await waitFor(() => evaluate('location.protocol === "chrome-extension:" && !!globalThis.chrome?.runtime?.id'));
   const status = await evaluate(`(async()=>{ const response=await chrome.runtime.sendMessage({type:'getJobs'}); return {id:chrome.runtime.id, background:response, version:chrome.runtime.getManifest().version}; })()`);
   console.log(JSON.stringify({ status, extensionId }));
   if (process.argv.includes('--convert') || process.argv.includes('--e2e') || process.argv.includes('--stress') || process.argv.includes('--volume')) {
