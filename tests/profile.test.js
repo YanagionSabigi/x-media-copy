@@ -157,6 +157,24 @@ test("copy writes the author block and the selected originals in order", async (
   } finally { setup.dom.window.close(); }
 });
 
+test("a four-photo post split into four grid cells is selected as one post with four images", async () => {
+  const setup = profileFixture({
+    html: header() + ["A", "B", "C", "D"].map((key, index) => tile(701, key, index + 1)).join(""),
+    message: request => request.urls.map(url => ({ url, dataUrl: "data:image/jpeg;base64,AAAA", size: 10 }))
+  });
+  try {
+    setup.toggle().click(); await tick(0);
+    setup.tiles()[0].dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await tick(0);
+    assert.match(setup.count(), /已选 4 张图 \/ 1 帖/, "the grid fallback finds every photo of the post");
+    for (const node of setup.tiles()) assert.ok(node.classList.contains("x-copy-tile-selected"), "every cell of the post is marked");
+    setup.copyButton().click();
+    await until(() => setup.writes.length || setup.document.querySelector(".x-copy-toast-error"));
+    assert.equal(setup.writes.length, 1);
+    assert.equal((setup.writes[0].html.match(/<img/g) || []).length, 4);
+  } finally { setup.dom.window.close(); }
+});
+
 test("copy reads images in batches of at most sixteen urls", async () => {
   const records = [];
   for (let id = 0; id < 20; id++) records.push({ postId: 300 + id, media: [{ type: "photo", url: ORIG(`K${id}`) }] });
