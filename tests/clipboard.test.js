@@ -64,12 +64,24 @@ test('invalid merged PNG aborts the entire clipboard write', async () => {
   assert.equal(writes.length, 0);
 });
 
+test('36 MiB merged PNG fits as Base64 HTML with text and source intact', async () => {
+  const writes = [];
+  class ClipboardItem { constructor(formats) { this.formats = formats; } }
+  const image = {dataUrl:'data:image/png;base64,'+'A'.repeat(48*1024*1024)};
+  const sandbox=vm.createContext({Blob,ClipboardItem,XCopyCore:require('../core.js'),navigator:{clipboard:{write:async items=>writes.push(items)}}});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../clipboard.js'),'utf8'),sandbox);
+  await sandbox.XCopyClipboard.writeText({original:'Text',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image});
+  assert.equal(writes.length,1);
+  assert.equal(await writes[0][0].formats['text/plain'].text(),'Text\nhttps://x.com/a/status/1');
+  assert.ok((await writes[0][0].formats['text/html'].text()).includes(image.dataUrl));
+});
+
 test('oversized lossless mixed HTML fails explicitly instead of dropping text or image in desktop chats', async () => {
   const writes = [];
   class ClipboardItem { constructor(formats) { this.formats = formats; } }
-  const image = {dataUrl:'data:image/png;base64,'+'A'.repeat(16*1024*1024)};
+  const image = {dataUrl:'data:image/png;base64,'+'A'.repeat(50*1024*1024)};
   const sandbox=vm.createContext({Blob,ClipboardItem,XCopyCore:require('../core.js'),navigator:{clipboard:{write:async items=>writes.push(items)}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../clipboard.js'),'utf8'),sandbox);
-  await assert.rejects(()=>sandbox.XCopyClipboard.writeText({original:'Text',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image}),/16 MiB/);
+  await assert.rejects(()=>sandbox.XCopyClipboard.writeText({original:'Text',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image}),/50 MiB/);
   assert.equal(writes.length,0);
 });

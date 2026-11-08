@@ -45,13 +45,17 @@ let browser, socket;
       ['vertical', [[0,0,300,60],[0,60,300,60],[0,120,300,60]]],
       ['grid', [[0,0,150,90],[150,0,150,90],[0,90,150,90],[150,90,150,90]]],
       ['unequal-widths', [[0,0,149,180],[149,0,151,180]]],
-      ['unequal-grid', [[0,0,149,89],[149,0,151,89],[0,89,149,91],[149,89,151,91]]]
+      ['unequal-grid', [[0,0,149,89],[149,0,151,89],[0,89,149,91],[149,89,151,91]]],
+      ['near-horizontal', [[0,0,75,180],[75,0,75,180],[150,0,75,177],[225,0,75,177]]],
+      ['near-vertical', [[0,0,300,60],[0,60,294,60],[0,120,294,60]]]
     ]) {
       const images = [];
+      const expectedCanvas = new OffscreenCanvas(300,180), expectedCtx = expectedCanvas.getContext('2d');
       for (const [x,y,w,h] of boxes) {
         const canvas = new OffscreenCanvas(w,h);
         canvas.getContext('2d').drawImage(source,x,y,w,h,0,0,w,h);
         images.push({ dataUrl: await dataUrl(await canvas.convertToBlob({type:'image/png'})) });
+        expectedCtx.drawImage(source,x,y,w,h,x,y,w,h);
       }
       const merged = await XCopyImageMerge.mergeImages(images);
       if (merged.length !== 1) throw new Error(name + ': expected one image');
@@ -60,7 +64,8 @@ let browser, socket;
       output.getContext('2d').drawImage(bitmap,0,0);
       const actual = output.getContext('2d').getImageData(0,0,bitmap.width,bitmap.height).data;
       const width = bitmap.width, height = bitmap.height; bitmap.close();
-      if (width !== 300 || height !== 180 || actual.length !== pixels.data.length || !actual.every((value,index) => value === pixels.data[index])) throw new Error(name + ': pixels or dimensions changed');
+      const expected = expectedCtx.getImageData(0,0,300,180).data;
+      if (width !== 300 || height !== 180 || actual.length !== expected.length || !actual.every((value,index) => value === expected[index])) throw new Error(name + ': pixels or dimensions changed');
       reports.push({name,width,height,exactPixels:true});
     }
     const one = [{dataUrl:'data:image/png;base64,unchanged'}];
@@ -135,9 +140,13 @@ let browser, socket;
         const tile = new OffscreenCanvas(bitmap.width,bitmap.height), tileCtx = tile.getContext('2d', {willReadFrequently:true});
         tileCtx.drawImage(bitmap,0,0); bitmap.close();
         const expected = tileCtx.getImageData(0,0,tile.width,tile.height).data;
-        if (canvas.height !== tile.height || x + tile.width > canvas.width) throw new Error('Example must restore a horizontal panorama');
+        if (canvas.height < tile.height || x + tile.width > canvas.width) throw new Error('Example must restore a horizontal panorama');
         const actual = ctx.getImageData(x,0,tile.width,tile.height).data;
         if (!actual.every((value,index)=>value===expected[index])) throw new Error('Example pixels changed');
+        if (canvas.height > tile.height) {
+          const padding = ctx.getImageData(x,tile.height,tile.width,canvas.height-tile.height).data;
+          if (!padding.every(value=>value===0)) throw new Error('Padding must remain transparent');
+        }
         x += tile.width;
       }
       if (x !== canvas.width) throw new Error('Example width mismatch');

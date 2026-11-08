@@ -1,6 +1,6 @@
 (function (root) {
   'use strict';
-  const MAX_PIXELS = 120000000, MAX_SIDE = 32767, MAX_BYTES = 24 * 1024 * 1024;
+  const MAX_PIXELS = 120000000, MAX_SIDE = 32767, MAX_BYTES = 36 * 1024 * 1024;
 
   function validSize(width, height) {
     return Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 &&
@@ -20,37 +20,39 @@
       throw new Error('合成图片尺寸超过处理上限（1.2 亿像素、单边 32767 像素）');
     }
     const layouts = [];
-    // Attachments stay in post order. Try every rectangular row-major grid;
-    // native dimensions must fit exactly, with no gaps, crop or resampling.
+    // Attachments stay in post order. Allow up to 3% variation along a join:
+    // independently exported slices can differ slightly in size. Pad at the
+    // bottom/right instead of cropping or resampling any original pixels.
     for (let columns = 1; columns <= tiles.length; columns++) {
       if (tiles.length % columns) continue;
+      const columnWidths = Array.from({ length: columns }, (_, col) =>
+        Math.max(...tiles.filter((_, index) => index % columns === col).map(tile => tile.width)));
       const placements = []; let width = 0, height = 0, difference = 0, seams = 0, fits = true;
       for (let start = 0; start < tiles.length; start += columns) {
-        const row = tiles.slice(start, start + columns), rowWidth = row.reduce((sum, tile) => sum + tile.width, 0);
-        if (row.some(tile => tile.height !== row[0].height) || (start && rowWidth !== width)) { fits = false; break; }
-        width = rowWidth; let x = 0;
+        const row = tiles.slice(start, start + columns), rowHeight = Math.max(...row.map(tile => tile.height));
+        if (row.some((tile, col) => tile.height < rowHeight * 0.97 || tile.width < columnWidths[col] * 0.97)) { fits = false; break; }
+        width = columnWidths.reduce((sum, value) => sum + value, 0); let x = 0;
         for (let col = 0; col < columns; col++) {
           const index = start + col, tile = tiles[index];
-          placements.push({ x, y: height }); x += tile.width;
+          placements.push({ x, y: height }); x += columnWidths[col];
           if (col) { difference += edgeDifference(tiles[index - 1].edges.right, tile.edges.left); seams++; }
           if (start) {
             const above = tiles[index - columns];
-            // Require aligned column boundaries for vertical edge comparison.
-            if (above.width !== tile.width) { fits = false; break; }
             difference += edgeDifference(above.edges.bottom, tile.edges.top); seams++;
           }
         }
         if (!fits) break;
-        height += row[0].height;
+        height += rowHeight;
       }
       if (fits && validSize(width, height)) {
         // Near-identical/flat edges cannot reveal the layout. Prefer a compact
         // rectangle only as a weak tie-breaker; seam evidence dominates.
-        const score = (seams ? difference / seams : 0) + 0.005 * Math.abs(Math.log(width / height));
+        const padding = 1 - tiles.reduce((area, tile) => area + tile.width * tile.height, 0) / (width * height);
+        const score = (seams ? difference / seams : 0) + padding + 0.005 * Math.abs(Math.log(width / height));
         layouts.push({ width, height, placements, score });
       }
     }
-    if (!layouts.length) throw new Error('图片尺寸无法无缝排成矩形，或合成后单边超过 32767 像素；请用普通点击分别复制');
+    if (!layouts.length) throw new Error('图片尺寸差异过大，或合成后超过处理上限（1.2 亿像素、单边 32767 像素）；请用普通点击分别复制');
     layouts.sort((a, b) => a.score - b.score);
     return layouts[0];
   }
@@ -145,7 +147,7 @@
       }
       let blob = await canvas.convertToBlob({ type: 'image/png' });
       check();
-      if (blob.size > MAX_BYTES) throw new Error('合成 PNG 超过 24 MiB，请用普通点击分别复制');
+      if (blob.size > MAX_BYTES) throw new Error('合成 PNG 超过 36 MiB，请用普通点击分别复制');
       blob = await optimizePng(blob, check);
       const encoded = await dataUrl(blob);
       check();

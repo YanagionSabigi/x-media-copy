@@ -46,8 +46,23 @@ test('edge evidence selects a 2 by 2 grid even when all three layouts fit', () =
 
 test('refuses nonrectangular attachments and oversized output instead of resizing', () => {
   const merger = api(); assert.ok(merger, 'image merging is available');
-  assert.throws(() => merger.chooseLayout([tile(100, 200, 0, 0, 0, 0), tile(101, 201, 0, 0, 0, 0)]), /尺寸|矩形/);
+  assert.throws(() => merger.chooseLayout([tile(100, 200, 0, 0, 0, 0), tile(140, 250, 0, 0, 0, 0)]), /尺寸|矩形/);
   assert.throws(() => merger.chooseLayout([tile(10000, 10000, 0, 0, 0, 0), tile(10000, 10000, 0, 0, 0, 0)]), /上限/);
+});
+
+test('post 2119234009901543927 joins slightly different slices without resizing', () => {
+  const layout = api().chooseLayout([
+    tile(1446, 2892, 0, 40, 0, 220), tile(1446, 2892, 40, 80, 0, 220),
+    tile(1417, 2835, 80, 120, 0, 220), tile(1418, 2835, 120, 160, 0, 220)
+  ]);
+  assert.equal(layout.width, 5727); assert.equal(layout.height, 2892);
+  assert.deepEqual(Array.from(layout.placements, p => [p.x, p.y]), [[0, 0], [1446, 0], [2892, 0], [4309, 0]]);
+});
+
+test('near-matching horizontal slices join vertically with original heights', () => {
+  const layout = api().chooseLayout([tile(300, 100, 0, 230, 0, 50), tile(294, 101, 0, 230, 50, 100)]);
+  assert.equal(layout.width, 300); assert.equal(layout.height, 201);
+  assert.deepEqual(Array.from(layout.placements, p => [p.x, p.y]), [[0, 0], [0, 100]]);
 });
 
 test('PNG recompression preserves scanline bytes, metadata and valid checksums while reducing size', async () => {
