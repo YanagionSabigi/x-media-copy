@@ -107,6 +107,65 @@
     return read();
   }
 
+  // Profile header controls live outside any <article>, so they need the same
+  // label matching without the post-ownership rules.
+  function profileControl(scope, type) {
+    const matches = [...scope.querySelectorAll('button, [role="button"], a, span, div')].filter(node => {
+      const values = [node.textContent || "", node.getAttribute("aria-label") || ""];
+      if (!values.some(value => value.length < 100 && labels[type].test(value.replace(/\s+/g, " ").trim()))) return false;
+      return visible(node);
+    });
+    const node = matches.find(candidate => !matches.some(other => other !== candidate && candidate.contains(other)));
+    if (!node) return null;
+    return node.closest('button, [role="button"], a') || node;
+  }
+
+  function profileIdentity(scope) {
+    const node = scope.querySelector('[data-testid="UserName"]');
+    const values = node ? [...node.querySelectorAll('span')].filter(span => !span.querySelector('span')).map(text).filter(Boolean) : [];
+    const handle = values.find(value => /^@[a-zA-Z0-9_]{1,15}$/.test(value)) || "";
+    return { name: values.find(value => value !== handle) || "", handle };
+  }
+
+  function profileBio(scope) {
+    const node = scope.querySelector('[data-testid="UserDescription"]');
+    return node ? text(node) : "";
+  }
+
+  // X shows either the original bio or its translation; the requested output
+  // needs both, so read one, reveal the other and restore the first view.
+  async function captureProfile(scope, options = {}) {
+    const timeoutMs = options.timeoutMs ?? 12000;
+    const settleMs = options.settleMs ?? 500;
+    const read = () => profileBio(scope);
+    let bio = "", bioTranslation = read();
+    const showOriginal = profileControl(scope, "original");
+    if (showOriginal) {
+      showOriginal.click();
+      bio = await waitForValue(() => {
+        const value = read();
+        return value && value !== bioTranslation ? value : "";
+      }, timeoutMs, settleMs);
+      const showTranslation = profileControl(scope, "translation");
+      if (showTranslation) {
+        showTranslation.click();
+        await waitForValue(() => (read() === bioTranslation ? bioTranslation : ""), Math.min(timeoutMs, 4000), settleMs);
+      }
+    } else {
+      bio = bioTranslation;
+      bioTranslation = "";
+      const showTranslation = profileControl(scope, "translation");
+      if (showTranslation) {
+        showTranslation.click();
+        bioTranslation = await waitForValue(() => {
+          const value = read();
+          return value && value !== bio ? value : "";
+        }, timeoutMs, settleMs);
+      }
+    }
+    return { ...profileIdentity(scope), bio, bioTranslation };
+  }
+
   async function captureTexts(article, options = {}) {
     const getArticle = options.getArticle || (() => article);
     const timeoutMs = options.timeoutMs ?? 12000;
@@ -146,7 +205,7 @@
     return { original, translation: includeTranslation ? translation : '' };
   }
 
-  const api = { owns, text, control, readState, postUrl, captureTexts };
+  const api = { owns, text, control, readState, postUrl, captureTexts, captureProfile };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.XCopyExtractor = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

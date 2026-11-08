@@ -133,3 +133,42 @@ test('original-only capture fails if X cannot reveal the real source', async () 
     await assert.rejects(extractor.captureTexts(article, { timeoutMs: 120, settleMs: 0, includeTranslation: false }), /未能读取源语言原文/);
   } finally { dom.window.close(); }
 });
+
+test('profile capture reads the translated bio, its original and restores the translation', async () => {
+  const dom = new JSDOM(`
+    <div id="profile">
+      <div data-testid="UserName"><span><span>rabi 🌸</span></span><span>@rabiadraw</span></div>
+      <div data-testid="UserDescription" dir="auto">我画当下喜欢的任何东西。不用AI。</div>
+      <div class="translate"><span>翻译自 英语</span><button id="show">显示原文</button></div>
+    </div>`, { url: 'https://x.com/rabiadraw/media' });
+  const document = dom.window.document;
+  document.querySelector('#show').addEventListener('click', function () {
+    const translated = this.textContent === '显示原文';
+    document.querySelector('[data-testid="UserDescription"]').textContent = translated
+      ? 'I draw whatever I like at the moment. NO A*I.'
+      : '我画当下喜欢的任何东西。不用AI。';
+    this.textContent = translated ? '显示翻译' : '显示原文';
+  });
+  const scope = document.querySelector('#profile');
+  const result = await extractor.captureProfile(scope, { timeoutMs: 2000, settleMs: 10 });
+  assert.equal(result.name, 'rabi 🌸');
+  assert.equal(result.handle, '@rabiadraw');
+  assert.equal(result.bio, 'I draw whatever I like at the moment. NO A*I.');
+  assert.equal(result.bioTranslation, '我画当下喜欢的任何东西。不用AI。');
+  assert.equal(document.querySelector('[data-testid="UserDescription"]').textContent, '我画当下喜欢的任何东西。不用AI。');
+  dom.window.close();
+});
+
+test('profile capture keeps the original when no translation exists and never clicks a post control', async () => {
+  const dom = new JSDOM(`<div id="profile">
+      <div data-testid="UserName"><span>rabi</span><span>@rabiadraw</span></div>
+      <div data-testid="UserDescription">Only original</div>
+    </div><div id="elsewhere"><button>显示翻译</button></div>`, { url: 'https://x.com/rabiadraw/media' });
+  let clicks = 0;
+  dom.window.document.querySelector('#elsewhere button').addEventListener('click', () => clicks++);
+  const result = await extractor.captureProfile(dom.window.document.querySelector('#profile'), { timeoutMs: 200, settleMs: 10 });
+  assert.equal(result.bio, 'Only original');
+  assert.equal(result.bioTranslation, '');
+  assert.equal(clicks, 0, 'controls outside the profile header must be ignored');
+  dom.window.close();
+});

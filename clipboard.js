@@ -14,6 +14,16 @@
     if (data.mergedImage && formats['text/html'].size > 50 * 1024 * 1024) throw new Error('无损合图的图文数据超过 50 MiB 处理上限；请用普通点击分别复制原图');
     await navigator.clipboard.write([new ClipboardItem(formats)]);
   }
+  async function writeProfile(data) {
+    const payload = core.buildProfilePayload(data);
+    const formats = {
+      "text/plain": new Blob([payload.plain], { type: "text/plain" }),
+      "text/html": new Blob([payload.html], { type: "text/html" })
+    };
+    // A profile batch is bounded by the selectable image count, not by QQ.
+    if (formats["text/html"].size > 128 * 1024 * 1024) throw new Error('所选图文数据超过 128 MiB 处理上限，请少选几张原图');
+    await navigator.clipboard.write([new ClipboardItem(formats)]);
+  }
   async function inspectImages(images) {
     const result = [];
     for (const image of images) {
@@ -40,7 +50,7 @@
     }
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
   }
-  const api = { writeText, writeImage, inspectImages };
+  const api = { writeText, writeProfile, writeImage, inspectImages };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.XCopyClipboard = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

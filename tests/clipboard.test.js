@@ -97,3 +97,19 @@ test('oversized lossless mixed HTML fails explicitly instead of dropping text or
   await assert.rejects(()=>sandbox.XCopyClipboard.writeText({original:'Text',postUrl:'https://x.com/a/status/1',images:[image],mergedImage:image}),/50 MiB/);
   assert.equal(writes.length,0);
 });
+
+test('profile copy writes the author block and images as mixed HTML and text', async () => {
+  const writes = [];
+  class ClipboardItem { constructor(formats) { this.formats = formats; } }
+  const sandbox = vm.createContext({ Blob, ClipboardItem, XCopyCore: require('../core.js'), navigator: { clipboard: { write: async items => writes.push(items) } } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../clipboard.js'), 'utf8'), sandbox);
+  await sandbox.XCopyClipboard.writeProfile({
+    name: 'rabi', handle: '@rabiadraw', bio: 'Bio', bioTranslation: '介绍',
+    profileUrl: 'https://x.com/rabiadraw', images: [{ dataUrl: 'data:image/png;base64,AAAA' }]
+  });
+  assert.equal(writes.length, 1);
+  const formats = writes[0][0].formats;
+  assert.deepEqual(Object.keys(formats), ['text/plain', 'text/html']);
+  assert.equal(await formats['text/plain'].text(), 'rabi\n@rabiadraw\n\nBio\n\n介绍\n\nhttps://x.com/rabiadraw');
+  assert.match(await formats['text/html'].text(), /<img[^>]+data:image\/png;base64,AAAA/);
+});

@@ -61,3 +61,66 @@
 .x-copy-toast-error { background: #b42318; }
 .x-copy-toast button { display: block; margin-top: 10px; padding: 6px 12px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .x-copy-toast button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* Profile media tab: a fixed pill toolbar that only appears on /<user>/media. */
+.x-copy-toolbar {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 2147483646;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: rgba(0,0,0,.78);
+  color: #fff;
+  box-shadow: 0 6px 22px rgba(0,0,0,.3);
+  font: 13px/1.2 system-ui, -apple-system, sans-serif;
+}
+.x-copy-toolbar button {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(255,255,255,.14);
+  cursor: pointer;
+}
+.x-copy-toolbar button:hover { background: rgba(255,255,255,.24); }
+.x-copy-toolbar button:focus-visible { outline: 2px solid #1d9bf0; outline-offset: 2px; }
+.x-copy-toolbar button:disabled { opacity: .45; cursor: not-allowed; }
+.x-copy-toolbar .x-copy-copy-selected { background: #1d9bf0; }
+.x-copy-toolbar .x-copy-copy-selected:hover:not(:disabled) { background: #1a8cd8; }
+.x-copy-toolbar .x-copy-select-toggle { background: transparent; border: 1px solid rgba(255,255,255,.4); }
+.x-copy-toolbar-count { white-space: nowrap; font-variant-numeric: tabular-nums; }
+html.x-copy-selecting a[href*="/status/"] { position: relative; cursor: crosshair; }
+html.x-copy-selecting a[href*="/status/"] img { transition: opacity .15s ease; }
+html.x-copy-selecting a[href*="/status/"]:hover img { opacity: .82; }
+.x-copy-tile-selected img { outline: 3px solid #1d9bf0; outline-offset: -3px; opacity: 1 !important; }
+.x-copy-tile-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: rgba(0,0,0,.35);
+  box-shadow: 0 1px 4px rgba(0,0,0,.45);
+  pointer-events: none;
+}
+.x-copy-tile-selected .x-copy-tile-check { border-color: #1d9bf0; background: #1d9bf0; }
+.x-copy-tile-selected .x-copy-tile-check::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font: 700 12px/1 system-ui, sans-serif;
+}

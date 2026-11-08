@@ -46,6 +46,16 @@
     } catch { return ""; }
   }
 
+  function canonicalProfileUrl(raw) {
+    try {
+      const url = new URL(raw, "https://x.com");
+      if (!/^(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)$/.test(url.hostname)) return "";
+      if (!["https:", "http:"].includes(url.protocol)) return "";
+      const path = url.pathname.match(/^\/([a-zA-Z0-9_]{1,15})(?:\/(?:media|with_replies|highlights|articles|photo|verified_followers))?\/?$/);
+      return path ? `https://x.com/${path[1]}` : "";
+    } catch { return ""; }
+  }
+
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (char) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
@@ -88,7 +98,26 @@
     return { plain, html: `<div>${[content, link].filter(Boolean).join(reserveGifLine ? '<br><br>' : '<br>')}</div>` };
   }
 
-  const api = { cleanText, stripHashtags, canonicalPostUrl, buildClipboardPayload };
+  // A profile media batch: author block, bio, its translation, the profile
+  // link, then the selected originals in the order they were chosen.
+  function buildProfilePayload({ name, handle, bio, bioTranslation, profileUrl, images = [] }) {
+    const head = [cleanText(name), cleanText(handle)].filter(Boolean).join("\n");
+    const original = cleanText(bio);
+    const translated = cleanText(bioTranslation);
+    const url = canonicalProfileUrl(profileUrl);
+    const plain = [head, original, translated, url].filter(Boolean).join("\n\n");
+    let imageHtml = '';
+    for (const item of images) {
+      if (/^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/.test(item.dataUrl || '')) {
+        imageHtml += `<img src="${escapeHtml(item.dataUrl)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
+      }
+    }
+    const body = [head, original, translated].filter(Boolean).map(htmlText).join('<br><br>');
+    const link = url ? `<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>` : '';
+    return { plain, html: `<div>${[body, imageHtml, link].filter(Boolean).join('<br><br>')}</div>` };
+  }
+
+  const api = { cleanText, stripHashtags, canonicalPostUrl, canonicalProfileUrl, buildClipboardPayload, buildProfilePayload };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.XCopyCore = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

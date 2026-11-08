@@ -58,7 +58,8 @@
         "extractor.js",
         "clipboard.js",
         "image-merge.js",
-        "content.js"
+        "content.js",
+        "profile.js"
       ],
       "css": [
         "content.css"

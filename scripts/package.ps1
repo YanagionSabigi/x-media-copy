@@ -6,7 +6,7 @@ $archivePath = Join-Path $packageRoot $archiveName
 if (Test-Path -LiteralPath $archivePath) { throw "Release already exists: $archivePath" }
 $stagePath = Join-Path ([IO.Path]::GetTempPath()) ('xcopy-package-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stagePath | Out-Null
-$files = @('manifest.json','core.js','extractor.js','clipboard.js','image-merge.js','content.js','content.css','media.js','media-main.js','media-hook.js','media-bridge.js','background.js','gif.js','offscreen.html','offscreen.js','popup.html','popup.js','README.md','LICENSE','NOTICE.md','PRIVACY.md','CHANGELOG.md','icons','vendor')
+$files = @('manifest.json','core.js','extractor.js','clipboard.js','image-merge.js','content.js','profile.js','content.css','media.js','media-main.js','media-hook.js','media-bridge.js','background.js','gif.js','offscreen.html','offscreen.js','popup.html','popup.js','README.md','LICENSE','NOTICE.md','PRIVACY.md','CHANGELOG.md','icons','vendor')
 $files += 'USAGE.md'
 foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $packageRoot $file) -Destination $stagePath -Recurse }
 # Publish from an explicit allowlist; existing releases are preserved.

@@ -116,3 +116,35 @@ test('compact layout has one blank line only between languages and no breaks bet
   assert.match(result.html, /><img[^>]+BBBB[^>]*><img[^>]+CCCC[^>]*><br><a /);
   assert.doesNotMatch(result.html, /<img[^>]*><br>(?:<br>)?<img|中文<br><br>|<br><br><a /);
 });
+
+test('profile payload lists the author block, bio, translation, page link and images', () => {
+  const images = ['AAAA', 'BBBB'].map(value => ({ dataUrl: `data:image/jpeg;base64,${value}` }));
+  const result = core.buildProfilePayload({
+    name: 'rabi 🌸', handle: '@rabiadraw',
+    bio: 'I draw whatever I like at the moment. NO A*I.',
+    bioTranslation: '我画当下喜欢的任何东西。不用AI。',
+    profileUrl: 'https://x.com/rabiadraw?ref=profile', images
+  });
+  assert.equal(result.plain, 'rabi 🌸\n@rabiadraw\n\nI draw whatever I like at the moment. NO A*I.\n\n我画当下喜欢的任何东西。不用AI。\n\nhttps://x.com/rabiadraw');
+  assert.match(result.html, /^<div>rabi 🌸<br>@rabiadraw<br><br>I draw whatever I like at the moment\. NO A\*I\.<br><br>我画当下喜欢的任何东西。不用AI。/);
+  assert.match(result.html, /不用AI。[\s\S]*<br><br><a href="https:\/\/x\.com\/rabiadraw">/);
+  assert.equal((result.html.match(/<img/g) || []).length, 2);
+});
+
+test('profile payload omits a missing translation and skips unsafe images', () => {
+  const result = core.buildProfilePayload({
+    name: 'rabi', handle: '@rabiadraw', bio: 'Line one\n\nLine two', bioTranslation: '',
+    profileUrl: 'https://x.com/rabiadraw', images: [{ dataUrl: 'data:image/svg+xml;base64,AAAA' }, { dataUrl: 'data:image/png;base64,CCCC' }]
+  });
+  assert.equal(result.plain, 'rabi\n@rabiadraw\n\nLine one\n\nLine two\n\nhttps://x.com/rabiadraw');
+  assert.equal((result.html.match(/<img/g) || []).length, 1);
+  assert.match(result.html, /Line one<br><br>Line two/);
+});
+
+test('profile URLs stay restricted to a plain handle', () => {
+  assert.equal(core.canonicalProfileUrl('https://x.com/rabiadraw'), 'https://x.com/rabiadraw');
+  assert.equal(core.canonicalProfileUrl('https://twitter.com/rabiadraw/media'), 'https://x.com/rabiadraw');
+  for (const raw of ['https://x.com/rabiadraw/status/1', 'https://x.com/i/lists/1', 'https://evil.test/rabiadraw', 'javascript:alert(1)']) {
+    assert.equal(core.canonicalProfileUrl(raw), '');
+  }
+});
