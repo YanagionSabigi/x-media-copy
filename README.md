@@ -2,13 +2,13 @@
 
 Chrome 扩展，在 X 推文底部添加复制与 GIF 按钮。把原文、页面译文、原图和出处一起复制到聊天窗口或文档，也可以下载 MP4，或把视频和动图制作成 GIF。
 
-当前版本 **1.3.0**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
+当前版本 **1.3.1**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
 
 ## 安装
 
 需要 Chrome 116 或以上版本，以及能正常访问 X 的网络环境。
 
-1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.3.0.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
+1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.3.1.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
 2. 在 Chrome 地址栏输入 `chrome://extensions`，打开右上角的「开发者模式」。
 3. 点击「加载已解压的扩展程序」，选择直接包含 `manifest.json` 的文件夹。
 4. 打开或刷新 `https://x.com/`、`https://twitter.com/` 页面。

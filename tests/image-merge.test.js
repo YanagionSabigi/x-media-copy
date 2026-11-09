@@ -83,3 +83,49 @@ test('PNG recompression preserves scanline bytes, metadata and valid checksums w
   const cancelled=new Error('page changed');
   await assert.rejects(()=>merger.optimizePng(new Blob([input]),()=>{throw cancelled;}),error=>error===cancelled);
 });
+
+test('post 2119402782662988030 keeps the four slices in one row despite flat top and bottom margins', () => {
+  // Four slices of one wide illustration. The artwork has white margins, so a
+  // spurious 2x2 grid joins two white edges; those joins are detail-free and
+  // must not outvote the real vertical seams.
+  const merger = api(); assert.ok(merger, 'image merging is available');
+  const bands = (base, step) => {
+    const data = new Uint8ClampedArray(64 * 4);
+    for (let i = 0; i < 64; i++) {
+      const value = i % 2 ? base : base + step;
+      data.set([value, value, value, 255], i * 4);
+    }
+    return data;
+  };
+  const white = new Uint8ClampedArray([255, 255, 255, 255]);
+  const slice = (width, height, left, right) => ({ width, height,
+    edges: { left: bands(left, 40), right: bands(right, 40), top: white, bottom: white } });
+  const layout = merger.chooseLayout([
+    slice(646, 1620, 100, 160), slice(646, 1622, 166, 220),
+    slice(646, 1621, 226, 280), slice(647, 1620, 286, 340)
+  ]);
+  assert.equal(layout.width, 2585);
+  assert.equal(layout.height, 1622);
+  assert.deepEqual(Array.from(layout.placements, p => [p.x, p.y]), [[0, 0], [646, 0], [1292, 0], [1938, 0]]);
+});
+
+test('a genuine 2 by 2 grid with detailed joins still wins over a false row', () => {
+  const merger = api(); assert.ok(merger, 'image merging is available');
+  const bands = base => {
+    const data = new Uint8ClampedArray(64 * 4);
+    for (let i = 0; i < 64; i++) {
+      const value = i % 2 ? base : base + 40;
+      data.set([value, value, value, 255], i * 4);
+    }
+    return data;
+  };
+  const quad = (left, right, top, bottom) => ({ width: 500, height: 500,
+    edges: { left: bands(left), right: bands(right), top: bands(top), bottom: bands(bottom) } });
+  const layout = merger.chooseLayout([
+    quad(100, 160, 40, 70), quad(166, 220, 40, 70),
+    quad(100, 160, 76, 130), quad(166, 220, 76, 130)
+  ]);
+  assert.equal(layout.width, 1000);
+  assert.equal(layout.height, 1000);
+  assert.deepEqual(Array.from(layout.placements, p => [p.x, p.y]), [[0, 0], [500, 0], [0, 500], [500, 500]]);
+});

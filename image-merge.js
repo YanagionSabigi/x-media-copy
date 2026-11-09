@@ -14,11 +14,32 @@
     }
     return total / (a.length / 4 * 3 * 255);
   }
+  // How much detail an edge carries. Flat margins or solid fills match anything,
+  // so they must not be able to outvote seams that run through the artwork.
+  function edgeDetail(edge) {
+    const count = edge.length / 4;
+    if (!count) return 0;
+    const values = new Float64Array(count);
+    let mean = 0;
+    for (let i = 0, pixel = 0; i < edge.length; i += 4, pixel++) {
+      const alpha = edge[i + 3] / 255;
+      values[pixel] = 255 + ((edge[i] + edge[i + 1] + edge[i + 2]) / 3 - 255) * alpha;
+      mean += values[pixel];
+    }
+    mean /= count;
+    let variance = 0;
+    for (let pixel = 0; pixel < count; pixel++) variance += (values[pixel] - mean) ** 2;
+    return Math.min(1, Math.sqrt(variance / count) / 24);
+  }
   function chooseLayout(tiles) {
     if (!tiles.length || tiles.length > 16) throw new Error('合图需要 1–16 张静态图片');
     if (tiles.some(tile => !validSize(tile.width, tile.height)) || tiles.reduce((area, tile) => area + tile.width * tile.height, 0) > MAX_PIXELS) {
       throw new Error('合成图片尺寸超过处理上限（1.2 亿像素、单边 32767 像素）');
     }
+    const detail = tiles.map(tile => ({
+      left: edgeDetail(tile.edges.left), right: edgeDetail(tile.edges.right),
+      top: edgeDetail(tile.edges.top), bottom: edgeDetail(tile.edges.bottom)
+    }));
     const layouts = [];
     // Attachments stay in post order. Allow up to 3% variation along a join:
     // independently exported slices can differ slightly in size. Pad at the
@@ -27,7 +48,17 @@
       if (tiles.length % columns) continue;
       const columnWidths = Array.from({ length: columns }, (_, col) =>
         Math.max(...tiles.filter((_, index) => index % columns === col).map(tile => tile.width)));
-      const placements = []; let width = 0, height = 0, difference = 0, seams = 0, fits = true;
+      const placements = []; let width = 0, height = 0, fits = true;
+      let difference = 0, seams = 0, rawDifference = 0, rawSeams = 0, unverified = 0;
+      const addSeam = (before, after, weight) => {
+        const value = edgeDifference(before, after);
+        rawDifference += value; rawSeams++;
+        // A seam whose edges carry no detail proves nothing: exclude it from the
+        // evidence and charge a fixed cost, so extra blank joins cannot make a
+        // wrong layout look better than the real one.
+        if (weight >= 0.25) { difference += value * weight; seams += weight; }
+        else unverified++;
+      };
       for (let start = 0; start < tiles.length; start += columns) {
         const row = tiles.slice(start, start + columns), rowHeight = Math.max(...row.map(tile => tile.height));
         if (row.some((tile, col) => tile.height < rowHeight * 0.97 || tile.width < columnWidths[col] * 0.97)) { fits = false; break; }
@@ -35,20 +66,22 @@
         for (let col = 0; col < columns; col++) {
           const index = start + col, tile = tiles[index];
           placements.push({ x, y: height }); x += columnWidths[col];
-          if (col) { difference += edgeDifference(tiles[index - 1].edges.right, tile.edges.left); seams++; }
+          if (col) addSeam(tiles[index - 1].edges.right, tile.edges.left, Math.min(detail[index - 1].right, detail[index].left));
           if (start) {
-            const above = tiles[index - columns];
-            difference += edgeDifference(above.edges.bottom, tile.edges.top); seams++;
+            const above = index - columns;
+            addSeam(tiles[above].edges.bottom, tile.edges.top, Math.min(detail[above].bottom, detail[index].top));
           }
         }
         if (!fits) break;
         height += rowHeight;
       }
       if (fits && validSize(width, height)) {
-        // Near-identical/flat edges cannot reveal the layout. Prefer a compact
-        // rectangle only as a weak tie-breaker; seam evidence dominates.
+        // Detail-free edges (white margins, solid fills) fall back to the plain
+        // comparison so flat artwork keeps the old layout choice.
+        const known = seams >= 0.5 ? difference / seams : (rawSeams ? rawDifference / rawSeams : 0);
+        const unverifiedCost = rawSeams ? 0.04 * unverified / rawSeams : 0;
         const padding = 1 - tiles.reduce((area, tile) => area + tile.width * tile.height, 0) / (width * height);
-        const score = (seams ? difference / seams : 0) + padding + 0.005 * Math.abs(Math.log(width / height));
+        const score = known + unverifiedCost + padding + 0.005 * Math.abs(Math.log(width / height));
         layouts.push({ width, height, placements, score });
       }
     }
