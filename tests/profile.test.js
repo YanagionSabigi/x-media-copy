@@ -95,6 +95,17 @@ test("toolbar appears only on the media tab and toggles selection mode", async (
   try { assert.equal(profile.toolbar(), null, "no toolbar outside the media tab"); } finally { profile.dom.window.close(); }
 });
 
+test("the toolbar is centred from the viewport width instead of a percentage", async () => {
+  const setup = profileFixture({ html: header() + tile(101, "A") });
+  try {
+    const toolbar = setup.toolbar();
+    assert.equal(toolbar.style.transform, "none", "no transform-based centring");
+    assert.match(toolbar.style.left, /^\d+px$/);
+    const expected = (setup.dom.window.document.documentElement.clientWidth || setup.dom.window.innerWidth) / 2;
+    assert.ok(Math.abs(Number.parseInt(toolbar.style.left, 10) - expected) <= 2, "the toolbar is centred in the viewport");
+  } finally { setup.dom.window.close(); }
+});
+
 test("selecting a tile selects every photo of its post", async () => {
   const setup = profileFixture({
     html: header() + tile(101, "A") + tile(102, "B"),

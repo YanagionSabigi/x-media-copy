@@ -64,9 +64,8 @@
 /* Profile media tab: a fixed pill toolbar that only appears on /<user>/media. */
 .x-copy-toolbar {
   position: fixed;
-  left: 50%;
+  left: 0;
   bottom: 24px;
-  transform: translateX(-50%);
   z-index: 2147483646;
   display: flex;
   align-items: center;

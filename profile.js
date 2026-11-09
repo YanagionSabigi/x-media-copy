@@ -157,6 +157,19 @@ let layer = null, keyOwners = null, marked = [];
     paint();
   }
 
+  // Centre from the real viewport width. A percentage left resolves against
+  // the fixed element's containing block, which can be wider than the window
+  // (X keeps a wider layout box), and the pill drifted to the right.
+  function placeToolbar() {
+    if (!toolbar?.isConnected) return;
+    toolbar.style.transform = "none";
+    toolbar.style.left = "0px";
+    const width = toolbar.getBoundingClientRect().width;
+    const origin = toolbar.getBoundingClientRect().left;
+    const view = document.documentElement.clientWidth || globalThis.innerWidth || 0;
+    toolbar.style.left = `${Math.round(origin + Math.max(0, view - width) / 2)}px`;
+  }
+
   function ensureToolbar() {
     if (toolbar?.isConnected) return;
     toolbar = document.createElement("div");
@@ -183,6 +196,7 @@ let layer = null, keyOwners = null, marked = [];
     });
     toolbar.append(countNode, copyNode, toggleNode);
     document.documentElement.append(toolbar);
+    placeToolbar();
   }
 
   function ensureLayer() {
@@ -247,6 +261,7 @@ let layer = null, keyOwners = null, marked = [];
       copyNode.textContent = busy ? "正在复制…" : "复制";
     }
     renderLayer();
+    placeToolbar();
   }
 
   function teardown() {
@@ -401,7 +416,7 @@ let layer = null, keyOwners = null, marked = [];
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   addEventListener("scroll", () => renderLayer(false), true);
-  addEventListener("resize", () => renderLayer(false));
+  addEventListener("resize", () => { renderLayer(false); placeToolbar(); });
   addEventListener("popstate", refresh);
   for (const method of ["pushState", "replaceState"]) {
     const original = history[method];
