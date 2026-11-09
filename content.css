@@ -96,31 +96,34 @@
 .x-copy-toolbar .x-copy-copy-selected:hover:not(:disabled) { background: #1a8cd8; }
 .x-copy-toolbar .x-copy-select-toggle { background: transparent; border: 1px solid rgba(255,255,255,.4); }
 .x-copy-toolbar-count { white-space: nowrap; font-variant-numeric: tabular-nums; }
-html.x-copy-selecting a[href*="/status/"] { position: relative; cursor: crosshair; }
-html.x-copy-selecting a[href*="/status/"] img { transition: opacity .15s ease; }
-html.x-copy-selecting a[href*="/status/"]:hover img { opacity: .82; }
-.x-copy-tile-selected img { outline: 3px solid #1d9bf0; outline-offset: -3px; opacity: 1 !important; }
+html.x-copy-selecting a[href*="/status/"] { cursor: crosshair; }
+.x-copy-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483645;
+  pointer-events: none;
+}
+.x-copy-tile-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid #1d9bf0;
+  border-radius: 4px;
+  background: rgba(29,155,240,.16);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.28);
+}
 .x-copy-tile-check {
   position: absolute;
   top: 6px;
   right: 6px;
-  width: 20px;
-  height: 20px;
-  box-sizing: border-box;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: rgba(0,0,0,.35);
-  box-shadow: 0 1px 4px rgba(0,0,0,.45);
-  pointer-events: none;
-}
-.x-copy-tile-selected .x-copy-tile-check { border-color: #1d9bf0; background: #1d9bf0; }
-.x-copy-tile-selected .x-copy-tile-check::after {
-  content: "✓";
-  position: absolute;
-  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: #1d9bf0;
   color: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.45);
   font: 700 12px/1 system-ui, sans-serif;
 }

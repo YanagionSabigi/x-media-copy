@@ -13,6 +13,7 @@
   const contextError = error => invalidated || /extension context (?:was )?invalidated/i.test(error?.message || "");
   let invalidated = false, mode = false, busy = false, toolbar, countNode, copyNode, toggleNode;
   let scanScheduled = false, scanTimer, activeHandle = "";
+let layer = null, keyOwners = null, marked = [];
 
   function assertContext() {
     try {
@@ -77,6 +78,38 @@
     return (link.getAttribute("href") || "").match(/\/status\/(\d+)/)?.[1] || "";
   }
 
+  function photoKey(raw) {
+    return (String(raw || "").match(/\/media\/([A-Za-z0-9_-]+)/) || [])[1] || "";
+  }
+
+  function keyOwner(key) {
+    if (!key) return "";
+    if (!keyOwners) {
+      keyOwners = new Map();
+      const index = globalThis.XCopyMediaIndex;
+      if (index?.size) for (const [id, record] of index) {
+        if (!Array.isArray(record)) continue;
+        for (const item of record) {
+          const value = photoKey(item?.url);
+          if (value && !keyOwners.has(value)) keyOwners.set(value, id);
+        }
+      }
+    }
+    return keyOwners.get(key) || "";
+  }
+
+  // X recycles grid cells while scrolling, so the link on a cell can already
+  // point at another post. The photo shown in the cell is what was clicked:
+  // trust the link when it owns that photo, otherwise follow the photo.
+  function tilePostId(tile) {
+    const hrefId = postIdOf(tile);
+    const key = photoKey(tile.querySelector("img")?.getAttribute("src") || "");
+    if (!key) return hrefId;
+    const record = hrefId ? globalThis.XCopyMediaIndex?.get(hrefId) : null;
+    if (Array.isArray(record) && record.some(item => photoKey(item?.url) === key)) return hrefId;
+    return keyOwner(key) || hrefId;
+  }
+
   function originalImageUrl(raw) {
     const value = String(raw || "");
     if (!value) return "";
@@ -90,7 +123,7 @@
     const push = raw => { const url = originalImageUrl(raw); if (url && !urls.includes(url)) urls.push(url); };
     const record = globalThis.XCopyMediaIndex?.get(postId);
     if (Array.isArray(record)) for (const item of record) if (item?.type === "photo" && item.url) push(item.url);
-    if (!urls.length) for (const tile of mediaTiles()) if (postIdOf(tile) === postId) push(tile.querySelector("img")?.getAttribute("src"));
+    if (!urls.length) for (const tile of mediaTiles()) if (tilePostId(tile) === postId) push(tile.querySelector("img")?.getAttribute("src"));
     if (!urls.length && link) push(link.querySelector("img")?.getAttribute("src"));
     return urls;
   }
@@ -102,7 +135,7 @@
   }
 
   function toggleTile(link) {
-    const postId = postIdOf(link);
+    const postId = tilePostId(link);
     if (!postId) return;
     if (busy) { toast("正在复制，请稍候", true); return; }
     if (selected.has(postId)) {
@@ -152,8 +185,52 @@
     document.documentElement.append(toolbar);
   }
 
-  function overlayOf(tile) {
-    return [...tile.children].find(node => node.classList?.contains("x-copy-tile-check")) || null;
+  function ensureLayer() {
+    if (layer?.isConnected) return layer;
+    layer = document.createElement("div");
+    layer.dataset.xCopyUi = "true";
+    layer.className = "x-copy-layer";
+    layer.setAttribute("aria-hidden", "true");
+    document.documentElement.append(layer);
+    return layer;
+  }
+
+  // Draw selection marks in their own fixed layer: touching X's grid markup
+  // (position, children) changes how X lays out its absolutely positioned
+  // images, which showed up as distorted thumbnails on hover.
+  function markBox(tile, box) {
+    const rect = tile.getBoundingClientRect();
+    box.style.left = `${rect.left}px`;
+    box.style.top = `${rect.top}px`;
+    box.style.width = `${rect.width}px`;
+    box.style.height = `${rect.height}px`;
+  }
+
+  function renderLayer(rebuild = false) {
+    if (!mode || invalidated) {
+      layer?.remove();
+      layer = null;
+      marked = [];
+      return;
+    }
+    const tiles = mediaTiles().filter(tile => selected.has(tilePostId(tile)));
+    const node = ensureLayer();
+    if (rebuild || tiles.length !== marked.length || tiles.some((tile, index) => tile !== marked[index])) {
+      node.textContent = "";
+      marked = tiles;
+      for (const tile of tiles) {
+        const box = document.createElement("div");
+        box.className = "x-copy-tile-box";
+        const check = document.createElement("span");
+        check.className = "x-copy-tile-check";
+        check.textContent = "✓";
+        box.append(check);
+        node.append(box);
+      }
+    }
+    // Scrolling only moves the existing boxes; rebuilding them every scroll
+    // event would churn the DOM for no visual benefit.
+    [...node.children].forEach((box, index) => { if (marked[index]) markBox(marked[index], box); });
   }
 
   function paint() {
@@ -169,18 +246,7 @@
       copyNode.disabled = !selected.size || busy;
       copyNode.textContent = busy ? "正在复制…" : "复制";
     }
-    for (const tile of mediaTiles()) {
-      const active = mode && selected.has(postIdOf(tile));
-      tile.classList.toggle("x-copy-tile-selected", active);
-      const overlay = overlayOf(tile);
-      if (mode && !overlay) {
-        const check = document.createElement("span");
-        check.className = "x-copy-tile-check";
-        check.dataset.xCopyUi = "true";
-        check.setAttribute("aria-hidden", "true");
-        tile.append(check);
-      } else if (!mode && overlay) overlay.remove();
-    }
+    renderLayer();
   }
 
   function teardown() {
@@ -188,10 +254,9 @@
     busy = false;
     selected.clear();
     document.documentElement.classList.remove("x-copy-selecting");
-    for (const tile of mediaTiles()) {
-      tile.classList.remove("x-copy-tile-selected");
-      overlayOf(tile)?.remove();
-    }
+    layer?.remove();
+    layer = null;
+    marked = [];
     toolbar?.remove();
     toolbar = countNode = copyNode = toggleNode = null;
     activeHandle = "";
@@ -210,6 +275,7 @@
       teardown();
       activeHandle = handle;
     }
+    keyOwners = null;
     ensureToolbar();
     paint();
   }
@@ -304,10 +370,19 @@
     }
   }
 
+  function tileAt(event) {
+    let node = event.target;
+    if (typeof document.elementFromPoint === "function" && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+      try { node = document.elementFromPoint(event.clientX, event.clientY) || node; } catch { /* Not available here. */ }
+    }
+    const tile = node?.closest?.('a[href*="/status/"]') || event.target?.closest?.('a[href*="/status/"]');
+    return tile && TILE_HREF.test(tile.getAttribute("href") || "") ? tile : null;
+  }
+
   document.addEventListener("click", event => {
     if (!mode) return;
-    const tile = event.target?.closest?.('a[href*="/status/"]');
-    if (!tile || !TILE_HREF.test(tile.getAttribute("href") || "")) return;
+    const tile = tileAt(event);
+    if (!tile) return;
     // Block navigation for every media tile, including video posters that
     // cannot be copied, so one stray click cannot discard the whole selection.
     event.preventDefault();
@@ -325,6 +400,8 @@
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
+  addEventListener("scroll", () => renderLayer(false), true);
+  addEventListener("resize", () => renderLayer(false));
   addEventListener("popstate", refresh);
   for (const method of ["pushState", "replaceState"]) {
     const original = history[method];

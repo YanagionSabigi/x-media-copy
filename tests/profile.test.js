@@ -30,6 +30,13 @@ function profileFixture(options = {}) {
     bio.textContent = translated ? "I draw whatever I like at the moment. NO A*I." : "我画当下喜欢的任何东西。不用AI。";
     showOriginal.textContent = translated ? "显示翻译" : "显示原文";
   });
+  if (options.rects) for (const node of dom.window.document.querySelectorAll('a[href*="/status/"]')) {
+    if (options.rects(node)) node.getBoundingClientRect = () => {
+      const rect = options.rects(node);
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height,
+        right: rect.left + rect.width, bottom: rect.top + rect.height, x: rect.left, y: rect.top };
+    };
+  }
   Object.assign(dom.window, {
     XCopyCore: core,
     XCopyExtractor: extractor,
@@ -101,12 +108,12 @@ test("selecting a tile selects every photo of its post", async () => {
     setup.tiles()[0].dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
     await tick(0);
     assert.match(setup.count(), /已选 4 张图 \/ 1 帖/, "a four-photo post contributes four images");
-    assert.ok(setup.tiles()[0].classList.contains("x-copy-tile-selected"));
-    assert.ok(setup.tiles()[0].querySelector(".x-copy-tile-check"));
+    assert.equal(setup.document.querySelectorAll(".x-copy-tile-box").length, 1, "the overlay marks the selected tile");
+    assert.equal(setup.tiles()[0].children.length, 1, "nothing is injected into X's grid cell");
     setup.tiles()[0].dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
     await tick(0);
     assert.match(setup.count(), /已选 0 张图 \/ 0 帖/);
-    assert.equal(setup.tiles()[0].classList.contains("x-copy-tile-selected"), false);
+    assert.equal(setup.document.querySelectorAll(".x-copy-tile-box").length, 0);
   } finally { setup.dom.window.close(); }
 });
 
@@ -123,9 +130,10 @@ test("rejects a post that would exceed the 20-image limit", async () => {
     const click = node => node.dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
     for (const node of setup.tiles().slice(0, 6)) { click(node); await tick(0); }
     assert.match(setup.count(), /已选 18 张图 \/ 6 帖/);
+    assert.equal(setup.document.querySelectorAll(".x-copy-tile-box").length, 6);
     click(setup.tiles()[6]); await tick(0);
     assert.match(setup.count(), /已选 18 张图 \/ 6 帖/, "the post that would exceed 20 images is not added");
-    assert.equal(setup.tiles()[6].classList.contains("x-copy-tile-selected"), false);
+    assert.equal(setup.document.querySelectorAll(".x-copy-tile-box").length, 6, "the rejected post adds no overlay");
     assert.match(setup.document.querySelector(".x-copy-toast-error").textContent, /20 张/);
   } finally { setup.dom.window.close(); }
 });
@@ -167,7 +175,7 @@ test("a four-photo post split into four grid cells is selected as one post with 
     setup.tiles()[0].dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
     await tick(0);
     assert.match(setup.count(), /已选 4 张图 \/ 1 帖/, "the grid fallback finds every photo of the post");
-    for (const node of setup.tiles()) assert.ok(node.classList.contains("x-copy-tile-selected"), "every cell of the post is marked");
+    assert.equal(setup.document.querySelectorAll(".x-copy-tile-box").length, 4, "every cell of the post is marked");
     setup.copyButton().click();
     await until(() => setup.writes.length || setup.document.querySelector(".x-copy-toast-error"));
     assert.equal(setup.writes.length, 1);
@@ -266,7 +274,43 @@ test("switching to another author's media tab clears the selection", async () =>
     await tick(0);
     assert.match(setup.count(), /已选 0 张图 \/ 0 帖/);
     assert.equal(setup.toggle().textContent, "多选");
-    assert.equal(setup.document.querySelectorAll(".x-copy-tile-check").length, 0, "tile overlays are removed");
+    assert.equal(setup.document.querySelector(".x-copy-layer"), null, "the selection layer is removed");
+  } finally { setup.dom.window.close(); }
+});
+
+test("the selection overlay follows the tile and its scroll position", async () => {
+  let rect = { left: 10, top: 20, width: 120, height: 90 };
+  const setup = profileFixture({ html: header() + tile(101, "A"), rects: () => rect });
+  try {
+    setup.toggle().click(); await tick(0);
+    setup.tiles()[0].dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await tick(0);
+    const box = () => setup.document.querySelector(".x-copy-tile-box");
+    assert.equal(box().style.left, "10px");
+    assert.equal(box().style.width, "120px");
+    rect = { left: 30, top: 40, width: 120, height: 90 };
+    setup.dom.window.dispatchEvent(new setup.dom.window.Event("scroll"));
+    await tick(40);
+    assert.equal(box().style.left, "30px", "the overlay re-reads the tile rect after scrolling");
+    assert.equal(box().style.top, "40px");
+  } finally { setup.dom.window.close(); }
+});
+
+test("the selection follows the clicked image when the grid link is stale", async () => {
+  // X recycles grid cells while scrolling; the visible image can belong to a
+  // newer post than the link that is still attached to the cell.
+  const setup = profileFixture({
+    html: header() + '<a href="https://x.com/rabiadraw/status/101/photo/1"><img src="https://pbs.twimg.com/media/BBBB?format=jpg&name=small"></a>',
+    records: [
+      { postId: 101, media: [{ type: "photo", url: ORIG("AAAA") }] },
+      { postId: 202, media: ["BBBB", "CCCC", "DDDD"].map(key => ({ type: "photo", url: ORIG(key) })) }
+    ]
+  });
+  try {
+    setup.toggle().click(); await tick(0);
+    setup.tiles()[0].dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await tick(0);
+    assert.match(setup.count(), /已选 3 张图 \/ 1 帖/, "the selected post comes from the clicked photo, not the stale link");
   } finally { setup.dom.window.close(); }
 });
 
