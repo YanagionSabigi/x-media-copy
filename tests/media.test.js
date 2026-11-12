@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { JSDOM } = require('jsdom');
 const media = require('../media.js');
+const extractor = require('../extractor.js');
 
 test('original photos use orig only, preserve native format and reject unrelated URLs', () => {
   assert.equal(media.originalImageUrl('https://pbs.twimg.com/media/ABC.png:small'), 'https://pbs.twimg.com/media/ABC?format=png&name=orig');
@@ -35,6 +36,25 @@ test('DOM excludes quotes, emoji, avatars and video covers, and infers tweet_vid
   assert.equal(result.filter(item => item.type === 'photo').length, 1);
   assert.equal(result.find(item => item.type === 'animated_gif').url, 'https://video.twimg.com/tweet_video/GIFKEY.mp4');
   assert.equal(result.find(item => item.type === 'video').url, '');
+  dom.window.close();
+});
+
+test('DOM ownership of a real quote card drops the quoted video without a status anchor', () => {
+  const dom = new JSDOM(`<article data-testid="tweet">
+    <div data-testid="User-Name"><span>Clara</span><span>@Clara1587151</span></div>
+    <div data-testid="tweetText" lang="hi">घर पर चूहा</div>
+    <video src="https://video.twimg.com/amplify_video/111/vid/avc1/606x764/own.mp4"></video>
+    <div role="link" tabindex="0">
+      <div data-testid="User-Name"><span>Harum</span><span>@arr4m</span></div>
+      <video src="https://video.twimg.com/amplify_video/222/vid/avc1/1080x1920/quoted.mp4"></video>
+    </div>
+    <a href="/Clara1587151/status/2120411821920383303"><time>now</time></a>
+  </article>`);
+  const article = dom.window.document.querySelector('article');
+  const result = media.collectDom(article, extractor.owns);
+  assert.deepEqual(result.filter(item => item.type === 'video').map(item => item.url),
+    ['https://video.twimg.com/amplify_video/111/vid/avc1/606x764/own.mp4']);
+  assert.equal(extractor.postUrl(article), 'https://x.com/Clara1587151/status/2120411821920383303');
   dom.window.close();
 });
 

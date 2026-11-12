@@ -467,6 +467,31 @@ test("handles delayed action bars, ignores quote actions and maintains one final
   } finally { dom.window.close(); }
 });
 
+test("quote cards copy this post's text and translation, never the quoted post", async () => {
+  const { dom, document, writes } = fixture(`<article data-testid="tweet">
+    <div data-testid="User-Name"><span>Clara</span><span>@Clara1587151</span></div>
+    <div data-testid="tweetText" lang="hi">चूहे को हाथ का अहसास अच्छा लगता है।</div>
+    <div lang="zh" dir="auto">老鼠喜欢手的触感。</div>
+    <div role="link" tabindex="0">
+      <div data-testid="User-Name"><span>Harum</span><span>@arr4m</span></div>
+      <div data-testid="tweetText" lang="in">Lagi pengen kelapa mudaa</div>
+      <div lang="zh" dir="auto">好想喝嫩椰子</div>
+    </div>
+    ${link(1)}${bar}
+  </article>`);
+  try {
+    document.querySelector('.x-copy-post-button').click();
+    await tick(0);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].plain, `चूहे को हाथ का अहसास अच्छा लगता है।
+
+老鼠喜欢手的触感。
+https://x.com/a/status/1`);
+    assert.doesNotMatch(writes[0].plain, /kelapa|好想喝嫩椰子/);
+    assert.equal(document.querySelectorAll('.x-copy-post-button').length, 1);
+  } finally { dom.window.close(); }
+});
+
 test("expanded translations also have hashtags filtered and keep the requested separators", async () => {
   const { dom, document, writes } = fixture(`<article><div data-testid="tweetText">Original #art</div><div data-testid="tweetText">译文 #艺术</div>${link(1)}${bar}</article>`);
   try {

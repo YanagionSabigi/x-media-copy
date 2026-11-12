@@ -10,11 +10,32 @@
 
   function owns(article, node) {
     if (node.closest("article") !== article || node.closest(excluded)) return false;
-    // X quote cards are often role=link containers inside the parent article.
+    // X may render a quoted post as a nested post container instead of a card.
+    const nested = node.closest('[data-testid="tweet"]');
+    if (nested && nested !== article) return false;
     for (let parent = node.parentElement; parent && parent !== article; parent = parent.parentElement) {
-      if (parent.matches('[role="link"][tabindex]') && parent.querySelector('a[href*="/status/"]')) return false;
+      // Quote cards are clickable containers that repeat the quoted author's
+      // header. X does not guarantee an inner /status/ anchor in every build,
+      // so the author header alone has to mark the card as another post.
+      if (parent.matches('[role="link"]') &&
+        (parent.querySelector('a[href*="/status/"]') || parent.querySelector('[data-testid="User-Name"]'))) return false;
+      if (parent.matches('[data-testid="quoteTweet"], [data-testid="card.wrapper"]')) return false;
     }
     return true;
+  }
+  // A quoted post always repeats its author header before its text. Anything
+  // after that second header belongs to the quote, even when X drops every
+  // container marker; the first header is this post's own author.
+  function quotedText(article, node) {
+    const author = article.querySelector('[data-testid="User-Name"]');
+    if (!author) return false;
+    let previous = null;
+    for (const header of article.querySelectorAll('[data-testid="User-Name"]')) {
+      if (header === node || header.contains(node)) continue;
+      if (header.compareDocumentPosition(node) & 4) previous = header;
+      else break;
+    }
+    return Boolean(previous && previous !== author);
   }
   function text(node) {
     function walk(current) {
@@ -56,7 +77,7 @@
   }
   function readState(article) {
     const primaryNodes = [...article.querySelectorAll('[data-testid="tweetText"]')]
-      .filter(node => owns(article, node) && visible(node));
+      .filter(node => owns(article, node) && visible(node) && !quotedText(article, node));
     const primary = primaryNodes.map(text).filter(Boolean);
     const markers = [...article.querySelectorAll('span, div')].filter(node => {
       const value = (node.textContent || "").trim();
@@ -66,7 +87,7 @@
     const markedNodes = genericTextNodes(article).filter(node => markers.some(marker =>
       marker.parentElement.parentElement?.contains(node) && (marker.compareDocumentPosition(node) & 4)));
     const extraNodes = [...new Set([...article.querySelectorAll('div[lang], span[lang], [data-testid*="translation" i], [data-testid*="translated" i], [data-testid*="translat" i] [dir="auto"]'), ...markedNodes])]
-      .filter(node => owns(article, node) && visible(node) &&
+      .filter(node => owns(article, node) && visible(node) && !quotedText(article, node) &&
         !primaryNodes.some(main => main === node || main.contains(node) || node.contains(main)) &&
         !node.closest('button, [role="button"], [role="group"]'));
     const extras = extraNodes.filter(node => !extraNodes.some(other => other !== node && node.contains(other)))
@@ -76,7 +97,8 @@
   }
   function genericTextNodes(article) {
     const nodes = [...article.querySelectorAll('[dir="auto"], div[lang], span[lang]')].filter(node =>
-      owns(article, node) && visible(node) && !node.closest('button, [role="button"], [role="group"], time') &&
+      owns(article, node) && visible(node) && !quotedText(article, node) &&
+      !node.closest('button, [role="button"], [role="group"], time') &&
       !node.closest('[data-testid="tweetText"]') && !node.querySelector('[data-testid="tweetText"]'));
     return nodes.filter(node => !nodes.some(other => other !== node && node.contains(other))).filter(node => {
       const value = text(node);

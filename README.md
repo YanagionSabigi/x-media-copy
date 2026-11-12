@@ -2,13 +2,13 @@
 
 Chrome 扩展，在 X 推文底部添加复制与 GIF 按钮。把原文、页面译文、原图和出处一起复制到聊天窗口或文档，也可以下载 MP4，或把视频和动图制作成 GIF。
 
-当前版本 **1.3.1**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
+当前版本 **1.3.2**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
 
 ## 安装
 
 需要 Chrome 116 或以上版本，以及能正常访问 X 的网络环境。
 
-1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.3.1.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
+1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.3.2.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
 2. 在 Chrome 地址栏输入 `chrome://extensions`，打开右上角的「开发者模式」。
 3. 点击「加载已解压的扩展程序」，选择直接包含 `manifest.json` 的文件夹。
 4. 打开或刷新 `https://x.com/`、`https://twitter.com/` 页面。
@@ -30,7 +30,7 @@ X 推文底部最右侧的复制按钮支持以下操作：
 
 **复制成功后会自动给原帖点赞**，已点赞的帖子保持原状态。静态图片随文字写入剪贴板；视频下载为 MP4，X 动图按下面的瘦身档转换为 GIF 后下载。
 
-译文取自 X 页面，插件不另行翻译。请等出现「已复制，可粘贴」后再切换窗口；译文未生成时，可先在 X 中展开翻译。复制时会清理正文和译文中的话题标签。
+译文取自 X 页面，插件不另行翻译。请等出现「已复制，可粘贴」后再切换窗口；译文未生成时，可先在 X 中展开翻译。复制时会清理正文和译文中的话题标签。带引用帖（转帖）的帖子只复制本帖的原文、译文和出处，引用卡片里的文字与媒体不参与复制。
 
 ### GIF 按钮
 

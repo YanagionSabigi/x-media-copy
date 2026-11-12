@@ -229,3 +229,54 @@ test('profile capture strips the translation attribution from the bio text', asy
     assert.equal(result.bioTranslation, '中文简介');
   } finally { dom.window.close(); }
 });
+
+// x.com/Clara1587151/status/2120411821920383303 quotes another post. X renders
+// the quote as a clickable card that repeats the quoted author's header; the
+// card does not guarantee an inner /status/ anchor, so the quoted text used to
+// be read as this post's own text. The second block then passed for the
+// translation and the real translation was dropped from the copy.
+const quotedPost = `
+  <div data-testid="User-Name"><span>Harum</span><span>@arr4m</span></div>
+  <div data-testid="tweetText" lang="in">Lagi pengen kelapa mudaa, dibantuin sama sodarakuu bukanyaa.... xixiixxi</div>
+  <div lang="zh" dir="auto">好想喝嫩椰子，被姐妹们帮忙，结果不是……哈哈哈</div>
+  <img src="https://pbs.twimg.com/amplify_video_thumb/2120405328080916480/img/cover.jpg">`;
+const ownPost = {
+  original: 'चूहे को हाथ का "गुफा जैसा" अहसास अच्छा लगता है और उसे हाथ से बाहर निकलना पसंद है।',
+  translation: '老鼠喜欢手带来的“洞穴般”触感，也喜欢从手里钻出去。'
+};
+function quotePost(card) {
+  const dom = new JSDOM(`<article data-testid="tweet">
+    <div data-testid="User-Name"><span>Clara</span><span>@Clara1587151</span></div>
+    <div data-testid="tweetText" lang="hi">${ownPost.original}</div>
+    <div lang="zh" dir="auto">${ownPost.translation}</div>
+    ${card}
+    <a href="/Clara1587151/status/2120411821920383303"><time>上午7:02 · 2026年11月11日</time></a>
+    <div role="group"><button data-testid="like">喜欢</button></div>
+  </article>`, { url: 'https://x.com/Clara1587151/status/2120411821920383303' });
+  return { dom, article: dom.window.document.querySelector('article') };
+}
+
+for (const [shape, card] of [
+  ['a clickable card without a status anchor', `<div role="link" tabindex="0">${quotedPost}</div>`],
+  ['a clickable card without tabindex', `<div role="link">${quotedPost}</div>`],
+  ['a nested post container', `<div data-testid="tweet">${quotedPost}</div>`],
+  ['a card without any X marker', `<div class="quote-card">${quotedPost}</div>`]
+]) {
+  test(`keeps this post's own text and translation when the quote is ${shape}`, async () => {
+    const { dom, article } = quotePost(card);
+    try {
+      assert.deepEqual(await extractor.captureTexts(article, fast), ownPost);
+      assert.equal(extractor.readState(article).primary.length, 1);
+      assert.equal(extractor.postUrl(article), 'https://x.com/Clara1587151/status/2120411821920383303');
+    } finally { dom.window.close(); }
+  });
+}
+
+test('still ignores a quote card whose status link is inside the clickable card', async () => {
+  const { dom, article } = quotePost(`<div role="link" tabindex="0">${quotedPost}
+    <a href="https://x.com/arr4m/status/2120405383764484443"><time>quote time</time></a></div>`);
+  try {
+    assert.deepEqual(await extractor.captureTexts(article, fast), ownPost);
+    assert.equal(extractor.postUrl(article), 'https://x.com/Clara1587151/status/2120411821920383303');
+  } finally { dom.window.close(); }
+});
