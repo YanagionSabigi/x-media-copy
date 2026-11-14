@@ -107,6 +107,29 @@ test('GIF clipboard upgrades to the local GIF file after conversion completes', 
   } finally { setup.dom.window.close(); }
 });
 
+test('a post with nineteen GIFs upgrades the clipboard with every local file in order', async () => {
+  const videos = Array.from({ length: 19 }, (unused, index) =>
+    `<video src="https://video.twimg.com/ext_tw_video/${index + 1}/a.mp4"></video>`).join('');
+  const jobs = Array.from({ length: 19 }, (unused, index) => ({ id: `gif-${index}`, status: 'queued', index, extension: 'gif' }));
+  const setup = fixture(`<article><div data-testid="tweetText">20</div>${videos}${link(1)}${bar}</article>`, {
+    media: true,
+    message: request => {
+      if (request.type === 'downloadMedia') return jobs;
+      if (request.type === 'getJobs') return jobs.map(job => ({ ...job, status: 'complete', fileUrl: `file:///C:/Downloads/X/${job.index + 1}.gif` }));
+      return true;
+    }
+  });
+  try {
+    setup.document.querySelector('.x-copy-gif-button').click();
+    await tick(700);
+    assert.equal(setup.writes.length, 2);
+    assert.equal((setup.writes[1].html.match(/<img/g) || []).length, 19);
+    assert.match(setup.writes[1].html, /src="file:\/\/\/C:\/Downloads\/X\/1\.gif"/);
+    assert.match(setup.writes[1].html, /src="file:\/\/\/C:\/Downloads\/X\/19\.gif"/);
+    assert.ok(setup.writes[1].html.indexOf('1.gif') < setup.writes[1].html.indexOf('19.gif'));
+  } finally { setup.dom.window.close(); }
+});
+
 test('GIF copy still likes when download submission fails', async () => {
   const setup = fixture(`<article><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, {
     media: true, message: () => { throw new Error('下载任务过多，请等待现有任务结束'); }
