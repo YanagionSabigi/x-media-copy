@@ -669,6 +669,29 @@ test('a twenty-photo post copies every original instead of stopping at sixteen',
   } finally { setup.dom.window.close(); }
 });
 
+test('a twenty-photo post above the 24 MiB batch cap is read in two ordered batches', async () => {
+  const reads = [];
+  const photos = Array.from({ length: 20 }, (unused, index) =>
+    `<img src="https://pbs.twimg.com/media/BIG${index}.jpg">`).join('');
+  const setup = fixture(`<article>${photos}${link(1)}${bar}</article>`, {
+    media: true,
+    message: request => {
+      if (request.type !== 'prepareImages') return request.urls ? imageResult(request) : true;
+      reads.push(request.urls.length);
+      if (request.urls.length > 10) throw new Error('原图合计超过 24 MiB，无法安全写入剪贴板');
+      return imageResult(request);
+    }
+  });
+  try {
+    setup.document.querySelector('.x-copy-post-button').click();
+    await tick(30);
+    assert.deepEqual(reads, [20, 10, 10]);
+    assert.equal(setup.writes.length, 1);
+    assert.equal((setup.writes[0].html.match(/<img /g) || []).length, 20);
+    assert.equal(setup.likes.length, 1);
+  } finally { setup.dom.window.close(); }
+});
+
 test('Shift copies text and translation with only the merged photo, then likes', async () => {
   const requests = [];
   const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {

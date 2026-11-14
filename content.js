@@ -118,6 +118,18 @@
     }
     syncInterest();
   }
+  // A single foreground batch is capped at 24 MiB by the worker. A post can
+  // still carry twenty originals whose total is larger, so split only when
+  // that specific limit is hit and keep attachment order.
+  async function readOriginals(urls) {
+    try {
+      return await send({ type: 'prepareImages', urls, owner: imageOwner });
+    } catch (error) {
+      if (urls.length === 1 || !/24 MiB|过大|图片列表无效/.test(error?.message || '')) throw error;
+      const middle = Math.ceil(urls.length / 2);
+      return [...await readOriginals(urls.slice(0, middle)), ...await readOriginals(urls.slice(middle))];
+    }
+  }
   async function prepareImages(items, key, epoch = imageEpoch) {
     if (!items.length) return [];
     assertPage(epoch);
@@ -131,7 +143,7 @@
       entry.foreground = (entry.foreground || 0) + 1;
       try {
         connectImages();
-        fetched = await send({ type: 'prepareImages', urls: missing, owner: imageOwner });
+        fetched = await readOriginals(missing);
         assertPage(epoch);
         if (!Array.isArray(fetched) || fetched.length !== missing.length) throw new Error('原图没有全部读取成功');
         retainImages(key || urls.join('\n'), entry, fetched, missing);

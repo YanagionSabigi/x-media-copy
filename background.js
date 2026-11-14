@@ -504,33 +504,36 @@ if (typeof importScripts === 'function') importScripts('media.js');
       const batchId = crypto.randomUUID();
       let created = null, files = [];
       try {
-        if (!Array.isArray(message.urls) || !message.urls.length) throw new Error('原图列表无效');
-        const owner = imageOwner(sender, `stage_${message.owner || 'batch'}_${batchId.slice(0, 8)}`);
-        let images;
-        try {
-          images = await prepareImages(message.urls, owner, false);
-        } finally {
-          releaseOwner(owner);
-        }
-        if (!Array.isArray(images) || images.length !== message.urls.length || images.some(image => !image)) {
-          throw new Error('原图没有全部读取成功，无法保存本地副本');
-        }
+        if (!Array.isArray(message.urls) || !message.urls.length || message.urls.length > media.MAX_MEDIA) throw new Error('图片列表无效');
         if (await cleanClipboardBatches(2)) throw new Error('原图副本缓存清理失败，请检查下载目录权限后重试');
         if (clipboardBatches.length >= 3) throw new Error('原图副本缓存清理失败，请检查下载目录权限后重试');
-        const queue = images.map((image, index) => {
-          const dataUrl = String(image.dataUrl || '');
-          const extension = dataUrl.startsWith('data:image/png') ? 'png' : dataUrl.startsWith('data:image/webp') ? 'webp' : 'jpg';
-          return { image, index, leaf: `${batchId}_${index + 1}.${extension}` };
-        });
-        let next = 0;
-        const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
-          while (next < queue.length) {
-            const item = queue[next++];
-            const id = await api.downloads.download({ url: item.image.dataUrl, filename: `X/clipboard/${item.leaf}`, conflictAction: 'uniquify', saveAs: false });
-            files.push({ id, leaf: item.leaf, index: item.index });
+        // Read and save one original at a time. The 24 MiB worker limit is per
+        // read batch, so a 20-photo post whose originals total more than that
+        // can still be staged without ever assembling the whole batch in RAM.
+        let next = 0, failure;
+        const workers = Array.from({ length: Math.min(3, message.urls.length) }, async () => {
+          while (!failure && next < message.urls.length) {
+            const index = next++;
+            try {
+              const owner = imageOwner(sender, `stage_${batchId.slice(0, 8)}_${index}`);
+              let images;
+              try {
+                images = await prepareImages([message.urls[index]], owner, false);
+              } finally {
+                releaseOwner(owner);
+              }
+              const image = images?.[0];
+              if (!image?.dataUrl) throw new Error('原图没有全部读取成功，无法保存本地副本');
+              const dataUrl = String(image.dataUrl);
+              const extension = dataUrl.startsWith('data:image/png') ? 'png' : dataUrl.startsWith('data:image/webp') ? 'webp' : 'jpg';
+              const leaf = `${batchId}_${index + 1}.${extension}`;
+              const id = await api.downloads.download({ url: dataUrl, filename: `X/clipboard/${leaf}`, conflictAction: 'uniquify', saveAs: false });
+              files.push({ id, leaf, index });
+            } catch (error) { failure ||= error; }
           }
         });
         await Promise.all(workers);
+        if (failure) throw failure;
         files.sort((a, b) => a.index - b.index);
         const deadline = now() + 30000;
         for (;;) {

@@ -238,7 +238,7 @@ test('a twenty-photo batch is accepted and a twenty-first URL is rejected', asyn
 test('stages every original as a local file when a twenty-photo HTML record would exceed QQ limits', async () => {
   let next = 0;
   const downloads = new Map();
-  const { service, api, calls } = setup({ fetch: async () => imageResponse() });
+  const { service, api, calls } = setup({ fetch: async () => imageResponse(1536 * 1024) });
   api.downloads.download = async args => {
     calls.push(args);
     const id = ++next;
