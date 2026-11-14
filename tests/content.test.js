@@ -651,6 +651,24 @@ test('Alt copies original with images and clean source without translation or pr
   } finally { dom.window.close(); }
 });
 
+test('a twenty-photo post copies every original instead of stopping at sixteen', async () => {
+  const calls = [];
+  const photos = Array.from({ length: 20 }, (unused, index) =>
+    `<img src="https://pbs.twimg.com/media/TWENTY${index}.jpg">`).join('');
+  const setup = fixture(`<article>${photos}${link(1)}${bar}</article>`, {
+    media: true, message: request => { calls.push(request); return imageResult(request); }
+  });
+  try {
+    setup.document.querySelector('.x-copy-post-button').click();
+    await tick(30);
+    const read = calls.find(call => call.type === 'prepareImages');
+    assert.equal(read.urls.length, 20);
+    assert.equal(setup.writes.length, 1);
+    assert.equal((setup.writes[0].html.match(/<img /g) || []).length, 20);
+    assert.equal(setup.likes.length, 1);
+  } finally { setup.dom.window.close(); }
+});
+
 test('Shift copies text and translation with only the merged photo, then likes', async () => {
   const requests = [];
   const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {

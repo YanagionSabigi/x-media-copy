@@ -66,6 +66,17 @@
     return escapeHtml(value).replace(/\n/g, "<br>");
   }
 
+  // Local image references let QQ paste originals that are too large for one
+  // data-URI HTML record. Only drive paths and image extensions are accepted.
+  function fileImageUrl(raw) {
+    try {
+      const url = new URL(raw);
+      if (url.protocol !== 'file:' || url.hostname || url.search || url.hash ||
+          !/\.(?:png|jpe?g|webp)$/i.test(url.pathname)) return '';
+      return url.href;
+    } catch { return ''; }
+  }
+
   function buildClipboardPayload({ original, translation, postUrl, images = [], reserveGifLine = false, mergedImage = null, mergedImageFileUrl = '' }) {
     original = stripHashtags(original);
     translation = stripHashtags(translation);
@@ -88,8 +99,10 @@
       } catch { throw new Error('合图的本地文件引用无效'); }
     }
     for (const item of images) {
+      const local = item?.fileUrl ? fileImageUrl(item.fileUrl) : localSource;
+      if (item?.fileUrl && !local) throw new Error('图片的本地文件引用无效');
       if (/^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/.test(item.dataUrl || '')) {
-        imageHtml += `<img src="${escapeHtml(localSource || item.dataUrl)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
+        imageHtml += `<img src="${escapeHtml(local || item.dataUrl)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
       }
     }
     const body = htmlSections.join('<br><br>');
@@ -108,8 +121,10 @@
     const plain = [head, original, translated, url].filter(Boolean).join("\n\n");
     let imageHtml = '';
     for (const item of images) {
+      const local = item?.fileUrl ? fileImageUrl(item.fileUrl) : '';
+      if (item?.fileUrl && !local) throw new Error('图片的本地文件引用无效');
       if (/^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/.test(item.dataUrl || '')) {
-        imageHtml += `<img src="${escapeHtml(item.dataUrl)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
+        imageHtml += `<img src="${escapeHtml(local || item.dataUrl)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
       }
     }
     const body = [head, original, translated].filter(Boolean).map(htmlText).join('<br><br>');

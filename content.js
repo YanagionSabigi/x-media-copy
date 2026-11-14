@@ -328,7 +328,8 @@
         mergedImageFileUrl = staged.fileUrl;
       } else if (clipboard.inspectImages) images = await clipboard.inspectImages(images);
       assertPage(epoch);
-      await clipboard.writeText({ ...data, images, mergedImage: merging ? images[0] : null, mergedImageFileUrl });
+      await clipboard.writeText({ ...data, images, mergedImage: merging ? images[0] : null, mergedImageFileUrl,
+        onStage: () => toast('原图较多，正在保存本地副本以便 QQ 完整粘贴，请保持此页激活') });
       // Keep the staging lease until the clipboard write has completed.
       if (merging) await send({type:'confirmMergedCopy',downloadId:mergedDownloadId});
     } catch (error) {

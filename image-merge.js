@@ -1,6 +1,8 @@
 (function (root) {
   'use strict';
   const MAX_PIXELS = 120000000, MAX_SIDE = 32767, MAX_BYTES = 36 * 1024 * 1024;
+  // One X post can carry twenty photos; merge all of them, matching QQ's limit.
+  const MAX_TILES = 20;
 
   function validSize(width, height) {
     return Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 &&
@@ -32,7 +34,7 @@
     return Math.min(1, Math.sqrt(variance / count) / 24);
   }
   function chooseLayout(tiles) {
-    if (!tiles.length || tiles.length > 16) throw new Error('合图需要 1–16 张静态图片');
+    if (!tiles.length || tiles.length > MAX_TILES) throw new Error(`合图需要 1–${MAX_TILES} 张静态图片`);
     if (tiles.some(tile => !validSize(tile.width, tile.height)) || tiles.reduce((area, tile) => area + tile.width * tile.height, 0) > MAX_PIXELS) {
       throw new Error('合成图片尺寸超过处理上限（1.2 亿像素、单边 32767 像素）');
     }
@@ -156,7 +158,7 @@
   async function mergeImages(images, check = () => {}) {
     check();
     if (images.length < 2) return images;
-    if (images.length > 16) throw new Error('一次最多合并 16 张静态图片');
+    if (images.length > MAX_TILES) throw new Error(`一次最多合并 ${MAX_TILES} 张静态图片`);
     const tiles = [];
     for (const image of images) {
       const bitmap = await createImageBitmap(await (await fetch(image.dataUrl)).blob());

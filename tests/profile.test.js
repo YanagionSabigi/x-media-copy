@@ -194,7 +194,7 @@ test("a four-photo post split into four grid cells is selected as one post with 
   } finally { setup.dom.window.close(); }
 });
 
-test("copy reads images in batches of at most sixteen urls", async () => {
+test("copy reads all twenty selected images in requests of at most twenty urls", async () => {
   const records = [];
   for (let id = 0; id < 20; id++) records.push({ postId: 300 + id, media: [{ type: "photo", url: ORIG(`K${id}`) }] });
   const setup = profileFixture({
@@ -205,21 +205,21 @@ test("copy reads images in batches of at most sixteen urls", async () => {
   try {
     setup.toggle().click(); await tick(0);
     const click = node => node.dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
-    for (const node of setup.tiles().slice(0, 18)) { click(node); await tick(0); }
-    assert.match(setup.count(), /已选 18 张图 \/ 18 帖/);
+    for (const node of setup.tiles()) { click(node); await tick(0); }
+    assert.match(setup.count(), /已选 20 张图 \/ 20 帖/);
     setup.copyButton().click();
     await until(() => setup.writes.length || setup.document.querySelector(".x-copy-toast-error"));
     const batches = setup.imageCalls();
-    assert.ok(batches.length >= 2, `expected more than one batch, saw ${batches.length}`);
-    assert.ok(batches.every(call => call.urls.length <= 16));
-    assert.equal(batches.flatMap(call => call.urls).length, 18);
+    assert.equal(batches.length, 1, "twenty images fit in one request");
+    assert.equal(batches[0].urls.length, 20);
+    assert.equal(batches.flatMap(call => call.urls).length, 20);
     assert.equal(setup.writes.length, 1);
-    assert.equal((setup.writes[0].html.match(/<img/g) || []).length, 18);
+    assert.equal((setup.writes[0].html.match(/<img/g) || []).length, 20);
   } finally { setup.dom.window.close(); }
 });
 
 test("splits a batch that exceeds the per-batch byte limit", async () => {
-  const keys = Array.from({ length: 16 }, (unused, index) => `S${index}`);
+  const keys = Array.from({ length: 20 }, (unused, index) => `S${index}`);
   const setup = profileFixture({
     html: header() + tile(401, "S0"),
     records: [{ postId: 401, media: keys.map(key => ({ type: "photo", url: ORIG(key) })) }],
@@ -232,12 +232,12 @@ test("splits a batch that exceeds the per-batch byte limit", async () => {
     setup.toggle().click(); await tick(0);
     setup.tiles()[0].dispatchEvent(new setup.dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
     await tick(0);
-    assert.match(setup.count(), /已选 16 张图 \/ 1 帖/);
+    assert.match(setup.count(), /已选 20 张图 \/ 1 帖/);
     setup.copyButton().click();
     await until(() => setup.writes.length || setup.document.querySelector(".x-copy-toast-error"));
     assert.equal(setup.writes.length, 1, "a split batch still copies");
-    assert.equal((setup.writes[0].html.match(/<img/g) || []).length, 16);
-    assert.ok(setup.imageCalls().every(call => call.urls.length <= 16));
+    assert.equal((setup.writes[0].html.match(/<img/g) || []).length, 20);
+    assert.ok(setup.imageCalls().every(call => call.urls.length <= 20));
   } finally { setup.dom.window.close(); }
 });
 

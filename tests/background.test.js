@@ -226,6 +226,106 @@ test('background rejects external senders and arbitrary media fetch URLs', async
   await assert.rejects(service.handle({ type: 'prepareImages', urls: ['https://pbs.twimg.com/profile_images/a.jpg'] }, page));
 });
 
+test('a twenty-photo batch is accepted and a twenty-first URL is rejected', async () => {
+  const urls = Array.from({ length: 20 }, (unused, index) => originalUrl('TWENTY' + index));
+  const { service } = setup({ fetch: async () => new Response('original', { headers: { 'content-type': 'image/png' } }) });
+  const result = await service.handle({ type: 'prepareImages', owner: 'twenty', urls }, page);
+  assert.equal(result.length, 20);
+  assert.deepEqual(result.map(image => image.url), urls);
+  await assert.rejects(service.handle({ type: 'prepareImages', owner: 'twenty', urls: [...urls, originalUrl('EXTRA')] }, page), /图片列表无效/);
+});
+
+test('stages every original as a local file when a twenty-photo HTML record would exceed QQ limits', async () => {
+  let next = 0;
+  const downloads = new Map();
+  const { service, api, calls } = setup({ fetch: async () => imageResponse() });
+  api.downloads.download = async args => {
+    calls.push(args);
+    const id = ++next;
+    downloads.set(id, `C:\\Downloads\\X\\clipboard\\${args.filename.split('/').pop()}`);
+    return id;
+  };
+  api.downloads.search = async ({ id }) => [{ id, state: 'complete', exists: true, filename: downloads.get(id) }];
+  api.downloads.removeFile = async id => { downloads.delete(id); };
+  const urls = Array.from({ length: 20 }, (unused, index) => originalUrl('STAGED' + index));
+  const staged = await service.handle({ type: 'stageClipboardImages', urls }, page);
+  assert.equal(staged.fileUrls.length, 20);
+  assert.match(staged.fileUrls[0], /^file:\/\/\/C:\/Downloads\/X\/clipboard\/[a-z0-9-]+_1\.png$/i);
+  assert.match(staged.fileUrls[19], /_20\.png$/i);
+  assert.equal(calls.length, 20);
+  await service.handle({ type: 'confirmClipboardImages', batchId: staged.batchId }, page);
+  const saved = await api.storage.local.get('clipboardImageBatches');
+  assert.equal(saved.clipboardImageBatches.length, 1);
+  assert.equal(saved.activeClipboardBatchId, staged.batchId);
+});
+
+test('releasing a staged batch removes every file and leaves no cache record', async () => {
+  let next = 0;
+  const downloads = new Map(), removed = [];
+  const { service, api } = setup({ fetch: async () => imageResponse() });
+  api.downloads.download = async args => {
+    const id = ++next;
+    downloads.set(id, `C:\\Downloads\\X\\clipboard\\${args.filename.split('/').pop()}`);
+    return id;
+  };
+  api.downloads.search = async ({ id }) => [{ id, state: 'complete', exists: true, filename: downloads.get(id) }];
+  api.downloads.removeFile = async id => { removed.push(id); downloads.delete(id); };
+  const staged = await service.handle({ type: 'stageClipboardImages', urls: ['REL1', 'REL2'].map(originalUrl) }, page);
+  await service.handle({ type: 'releaseClipboardImages', batchId: staged.batchId }, page);
+  assert.equal(removed.length, 2);
+  const saved = await api.storage.local.get('clipboardImageBatches');
+  assert.equal(saved.clipboardImageBatches.length, 0);
+});
+
+test('an interrupted staged file aborts the batch and removes every partial download', async () => {
+  let next = 0;
+  const downloads = new Map(), removed = [];
+  const { service, api } = setup({ fetch: async () => imageResponse() });
+  api.downloads.download = async args => {
+    const id = ++next;
+    downloads.set(id, `C:\\Downloads\\X\\clipboard\\${args.filename.split('/').pop()}`);
+    return id;
+  };
+  api.downloads.search = async ({ id }) => [{ id, state: id === 2 ? 'interrupted' : 'complete', exists: true, filename: downloads.get(id) }];
+  api.downloads.removeFile = async id => { removed.push(id); downloads.delete(id); };
+  await assert.rejects(service.handle({ type: 'stageClipboardImages', urls: ['PART1', 'PART2'].map(originalUrl) }, page), /中断/);
+  assert.equal(removed.length, 2);
+  const saved = await api.storage.local.get('clipboardImageBatches');
+  assert.equal(saved.clipboardImageBatches.length, 0);
+});
+
+test('staged batches retain the active copy and clean the previous one', async () => {
+  let next = 0;
+  const downloads = new Map(), removed = [];
+  const { service, api } = setup({ fetch: async () => imageResponse() });
+  api.downloads.download = async args => {
+    const id = ++next;
+    downloads.set(id, `C:\\Downloads\\X\\clipboard\\${args.filename.split('/').pop()}`);
+    return id;
+  };
+  api.downloads.search = async ({ id }) => [{ id, state: 'complete', exists: true, filename: downloads.get(id) }];
+  api.downloads.removeFile = async id => { removed.push(id); downloads.delete(id); };
+  const first = await service.handle({ type: 'stageClipboardImages', urls: [originalUrl('OLD')] }, page);
+  await service.handle({ type: 'confirmClipboardImages', batchId: first.batchId }, page);
+  const second = await service.handle({ type: 'stageClipboardImages', urls: [originalUrl('KEEP')] }, page);
+  await service.handle({ type: 'confirmClipboardImages', batchId: second.batchId }, page);
+  const third = await service.handle({ type: 'stageClipboardImages', urls: [originalUrl('NEW')] }, page);
+  await service.handle({ type: 'confirmClipboardImages', batchId: third.batchId }, page);
+  const saved = await api.storage.local.get('clipboardImageBatches');
+  assert.equal(saved.clipboardImageBatches.length, 2);
+  assert.equal(saved.clipboardImageBatches.some(batch => batch.id === first.batchId), false);
+  assert.equal(saved.activeClipboardBatchId, third.batchId);
+  assert.equal(removed.length, 1);
+});
+
+test('staging rejects a twenty-first original and non-page senders before downloading', async () => {
+  const { service, calls } = setup({ fetch: async () => imageResponse() });
+  const urls = Array.from({ length: 21 }, (unused, index) => originalUrl('TOOMANY' + index));
+  await assert.rejects(service.handle({ type: 'stageClipboardImages', urls }, page), /图片列表无效/);
+  await assert.rejects(service.handle({ type: 'stageClipboardImages', urls: urls.slice(0, 1) }, popup), /不支持/);
+  assert.equal(calls.length, 0);
+});
+
 test('orig fetch rejects a redirected thumbnail instead of silently copying it', async () => {
   const response = new Response('image', { headers: { 'content-type': 'image/png' } });
   Object.defineProperty(response, 'url', { value: 'https://pbs.twimg.com/media/ABC?format=png&name=small' });

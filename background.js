@@ -18,6 +18,7 @@ if (typeof importScripts === 'function') importScripts('media.js');
     let cachedImageBytes = 0, activeImages = 0, activePrefetch = 0, expiryTimer;
     let jobs = [], gifQueue = Promise.resolve(), creating, stagingMerged = false;
     let mergedFiles = [], activeMergedFile = null, mergedFileQueue = Promise.resolve();
+    let clipboardBatches = [], activeClipboardBatch = null, clipboardBatchQueue = Promise.resolve(), stagingClipboard = false;
     const mergedFileStore = api.storage.local;
     const ready = (async () => {
       const saved = await api.storage.session.get('jobs');
@@ -29,9 +30,15 @@ if (typeof importScripts === 'function') importScripts('media.js');
         } else job.status = 'failed';
         if (job.status === 'failed') job.error = '扩展后台已重启，请重试此任务';
       }
-      const cached = await mergedFileStore.get(['mergedClipboardFiles','activeMergedClipboardId']);
+      const cached = await mergedFileStore.get(['mergedClipboardFiles','activeMergedClipboardId','clipboardImageBatches','activeClipboardBatchId']);
       mergedFiles = Array.isArray(cached.mergedClipboardFiles) ? cached.mergedClipboardFiles.filter(file => Number.isInteger(file.id) && Number.isFinite(file.createdAt)) : [];
       activeMergedFile = cached.activeMergedClipboardId ?? null;
+      clipboardBatches = Array.isArray(cached.clipboardImageBatches)
+        ? cached.clipboardImageBatches.filter(batch => batch && typeof batch.id === 'string' && Number.isFinite(batch.createdAt) &&
+          Array.isArray(batch.files) && batch.files.length && batch.files.every(file => Number.isInteger(file.id) && typeof file.leaf === 'string'))
+        : [];
+      activeClipboardBatch = typeof cached.activeClipboardBatchId === 'string' ? cached.activeClipboardBatchId : null;
+      await cleanClipboardBatches(2).catch(() => {});
     })();
     function senderKind(sender) {
       if (sender?.id !== api.runtime.id) throw new Error('不接受外部调用');
@@ -262,7 +269,7 @@ if (typeof importScripts === 'function') importScripts('media.js');
       }
     }
     async function prepareImages(urls, owner, speculative = false) {
-      if (!Array.isArray(urls) || urls.length > 16) throw new Error('图片列表无效');
+      if (!Array.isArray(urls) || urls.length > media.MAX_MEDIA) throw new Error('图片列表无效');
       for (const url of urls) if (!media.originalImageUrl(url) || media.originalImageUrl(url) !== url) throw new Error('只能读取有效的 orig 原图地址');
       if (owner.batches.size >= 64) throw new Error('图片请求过多，请稍后重试');
       const batch = { allowed: new Set(urls) };
@@ -309,7 +316,7 @@ if (typeof importScripts === 'function') importScripts('media.js');
       for (const owner of owners.values()) if (owner.tabId === tabId) releaseOwner(owner);
     });
     async function resolveMedia(list, tabId) {
-      if (!Array.isArray(list) || list.length > 16) throw new Error('媒体列表无效');
+      if (!Array.isArray(list) || list.length > media.MAX_MEDIA) throw new Error('媒体列表无效');
       const items = list.map(media.normalizeMedia).filter(Boolean);
       if (items.every(item => item.type === 'photo' || item.url)) return items;
       let captured = [];
@@ -383,6 +390,46 @@ if (typeof importScripts === 'function') importScripts('media.js');
       mergedFileQueue = result.catch(() => {});
       return result;
     }
+    const saveClipboardBatches = () => mergedFileStore.set({clipboardImageBatches:clipboardBatches,activeClipboardBatchId:activeClipboardBatch});
+    function withClipboardBatchLock(operation) {
+      const result = clipboardBatchQueue.then(operation);
+      clipboardBatchQueue = result.catch(() => {});
+      return result;
+    }
+    // QQ can read a local file path in pasted HTML even when the combined
+    // data-URI record is too large; use the same safe path encoder as merging.
+    function localFileUrl(filename) {
+      const normalized = filename?.replace(/\\/g, '/');
+      if (!normalized || normalized.startsWith('//') || !/^(?:[a-z]:\/|\/)/i.test(normalized)) return '';
+      const pathname = normalized.split('/').map(encodeURIComponent).join('/').replace(/^([a-z])%3A\//i, '$1:/');
+      return 'file://' + (pathname.startsWith('/') ? '' : '/') + pathname;
+    }
+    async function removeClipboardBatch(batch) {
+      for (const file of batch.files) {
+        const [item] = await api.downloads.search({id:file.id});
+        const sameFile = item && (file.filename ? item.filename === file.filename : item.filename?.replace(/\\/g,'/').endsWith('/X/clipboard/'+file.leaf));
+        if (sameFile && item.exists !== false) {
+          if (item.state === 'in_progress') await api.downloads.cancel(file.id);
+          await api.downloads.removeFile(file.id);
+        }
+      }
+    }
+    async function cleanClipboardBatches(limit) {
+      const keep = new Set(clipboardBatches.filter(batch => batch.id === activeClipboardBatch || batch.pendingUntil > now()).map(batch => batch.id));
+      for (const batch of clipboardBatches.slice().reverse()) {
+        if (keep.size < limit && now() - batch.createdAt < 24 * 60 * 60 * 1000) keep.add(batch.id);
+      }
+      let failed = false;
+      for (const batch of clipboardBatches.slice()) {
+        if (keep.has(batch.id)) continue;
+        try {
+          await removeClipboardBatch(batch);
+          clipboardBatches = clipboardBatches.filter(record => record.id !== batch.id);
+        } catch { failed = true; }
+      }
+      await saveClipboardBatches();
+      return failed;
+    }
     async function cleanMergedFiles(limit) {
       const keep = new Set(mergedFiles.filter(file => file.id === activeMergedFile || file.pendingUntil > now()).map(file => file.id));
       for (const file of mergedFiles.slice().reverse()) {
@@ -448,6 +495,74 @@ if (typeof importScripts === 'function') importScripts('media.js');
         throw error;
       } finally { stagingMerged = false; }
     }
+    // When a post has many large originals, the inline data-URI HTML exceeds
+    // the 16 MiB rich-text record QQ will paste. Save each original once and
+    // reference it by local path, exactly like the verified merged-image path.
+    async function stageClipboardImages(message, sender) {
+      if (stagingClipboard) throw new Error('正在保存另一批原图，请稍后重试');
+      stagingClipboard = true;
+      const batchId = crypto.randomUUID();
+      let created = null, files = [];
+      try {
+        if (!Array.isArray(message.urls) || !message.urls.length) throw new Error('原图列表无效');
+        const owner = imageOwner(sender, `stage_${message.owner || 'batch'}_${batchId.slice(0, 8)}`);
+        let images;
+        try {
+          images = await prepareImages(message.urls, owner, false);
+        } finally {
+          releaseOwner(owner);
+        }
+        if (!Array.isArray(images) || images.length !== message.urls.length || images.some(image => !image)) {
+          throw new Error('原图没有全部读取成功，无法保存本地副本');
+        }
+        if (await cleanClipboardBatches(2)) throw new Error('原图副本缓存清理失败，请检查下载目录权限后重试');
+        if (clipboardBatches.length >= 3) throw new Error('原图副本缓存清理失败，请检查下载目录权限后重试');
+        const queue = images.map((image, index) => {
+          const dataUrl = String(image.dataUrl || '');
+          const extension = dataUrl.startsWith('data:image/png') ? 'png' : dataUrl.startsWith('data:image/webp') ? 'webp' : 'jpg';
+          return { image, index, leaf: `${batchId}_${index + 1}.${extension}` };
+        });
+        let next = 0;
+        const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+          while (next < queue.length) {
+            const item = queue[next++];
+            const id = await api.downloads.download({ url: item.image.dataUrl, filename: `X/clipboard/${item.leaf}`, conflictAction: 'uniquify', saveAs: false });
+            files.push({ id, leaf: item.leaf, index: item.index });
+          }
+        });
+        await Promise.all(workers);
+        files.sort((a, b) => a.index - b.index);
+        const deadline = now() + 30000;
+        for (;;) {
+          const results = await Promise.all(files.map(file => api.downloads.search({ id: file.id }).then(items => items[0])));
+          if (results.some(item => item?.state === 'interrupted')) throw new Error('原图副本保存中断，复制未完成');
+          if (results.every(item => item?.state === 'complete')) {
+            const fileUrls = results.map((item, index) => {
+              const fileUrl = localFileUrl(item?.filename);
+              if (item?.exists === false || !fileUrl) throw new Error('无法取得原图副本的本地文件，复制未完成');
+              files[index].filename = item.filename;
+              return fileUrl;
+            });
+            created = { id: batchId, createdAt: now(), pendingUntil: now() + 10 * 60 * 1000, files };
+            clipboardBatches.push(created);
+            await saveClipboardBatches();
+            return { batchId, fileUrls };
+          }
+          if (now() > deadline) throw new Error('等待原图副本保存超时，复制未完成');
+          await new Promise(resolve => later(resolve, 100));
+        }
+      } catch (error) {
+        if (created) {
+          clipboardBatches = clipboardBatches.filter(batch => batch.id !== created.id);
+          await saveClipboardBatches().catch(() => {});
+        }
+        for (const file of files) {
+          try { await api.downloads.cancel(file.id); } catch { /* Already terminal. */ }
+          try { await api.downloads.removeFile(file.id); } catch { /* Already gone. */ }
+        }
+        throw error;
+      } finally { stagingClipboard = false; }
+    }
     async function handle(message, sender) {
       const kind = senderKind(sender);
       await ready;
@@ -472,6 +587,23 @@ if (typeof importScripts === 'function') importScripts('media.js');
         await cleanMergedFiles(3);
         return true;
       });
+      if (message.type === 'stageClipboardImages' && kind === 'page') return withClipboardBatchLock(() => stageClipboardImages(message, sender));
+      if (['confirmClipboardImages','releaseClipboardImages'].includes(message.type) && kind === 'page') return withClipboardBatchLock(async () => {
+        const batch = clipboardBatches.find(record => record.id === message.batchId);
+        if (!batch) throw new Error('原图副本来源无效');
+        if (message.type === 'confirmClipboardImages') {
+          delete batch.pendingUntil;
+          activeClipboardBatch = batch.id;
+          await cleanClipboardBatches(2);
+        } else {
+          let removed = true;
+          try { await removeClipboardBatch(batch); } catch { removed = false; }
+          if (removed) clipboardBatches = clipboardBatches.filter(record => record.id !== batch.id);
+          if (activeClipboardBatch === batch.id) activeClipboardBatch = null;
+          await saveClipboardBatches();
+        }
+        return true;
+      });
       if (['prepareImages', 'prefetchImages'].includes(message.type) && kind === 'page') return prepareImages(message.urls, imageOwner(sender, message.owner), message.type === 'prefetchImages');
       if (message.type === 'releaseImages' && kind === 'page') {
         const key = ownerKey(sender, message.owner);
@@ -482,7 +614,7 @@ if (typeof importScripts === 'function') importScripts('media.js');
       }
       if (message.type === 'resolveMedia' && kind === 'page') return resolveMedia(message.media, sender.tab.id);
       if (message.type === 'downloadMedia' && kind === 'page') {
-        if (!/^\d{1,30}$/.test(message.postId) || !Array.isArray(message.media) || message.media.length > 16) throw new Error('帖子或媒体列表无效');
+        if (!/^\d{1,30}$/.test(message.postId) || !Array.isArray(message.media) || message.media.length > media.MAX_MEDIA) throw new Error('帖子或媒体列表无效');
         if (message.format !== undefined && !['gif', 'mp4'].includes(message.format)) throw new Error('下载格式无效');
         if (message.gifMode !== undefined && !['slim', 'source'].includes(message.gifMode)) throw new Error('GIF 模式无效');
         const selected = message.media.map(media.normalizeMedia).filter(item => item && item.type !== 'photo');

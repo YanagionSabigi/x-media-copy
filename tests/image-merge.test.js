@@ -129,3 +129,30 @@ test('a genuine 2 by 2 grid with detailed joins still wins over a false row', ()
   assert.equal(layout.height, 1000);
   assert.deepEqual(Array.from(layout.placements, p => [p.x, p.y]), [[0, 0], [500, 0], [0, 500], [500, 500]]);
 });
+
+test('twenty slices merge as a 4 by 5 grid and a twenty-first is rejected', () => {
+  const merger = api(); assert.ok(merger, 'image merging is available');
+  const bands = base => {
+    const data = new Uint8ClampedArray(64 * 4);
+    for (let i = 0; i < 64; i++) {
+      const value = i % 2 ? base : base + 40;
+      data.set([value, value, value, 255], i * 4);
+    }
+    return data;
+  };
+  // Build exact joins for four columns and five rows. Right/bottom edges repeat
+  // the neighbour's left/top edge, so other factorisations cannot score zero.
+  const tiles = [];
+  for (let row = 0; row < 5; row++) for (let col = 0; col < 4; col++) {
+    tiles.push({ width: 100, height: 100, edges: {
+      left: bands(100 + row * 10 + col * 3), right: bands(100 + row * 10 + (col + 1) * 3),
+      top: bands(200 + row * 10 + col * 3), bottom: bands(200 + (row + 1) * 10 + col * 3)
+    } });
+  }
+  const layout = merger.chooseLayout(tiles);
+  assert.equal(tiles.length, 20);
+  assert.equal(layout.width, 400);
+  assert.equal(layout.height, 500);
+  assert.equal(layout.placements.length, 20);
+  assert.throws(() => merger.chooseLayout([...tiles, tiles[0]]), /1–20|20 张/);
+});

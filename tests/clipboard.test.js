@@ -98,6 +98,98 @@ test('oversized lossless mixed HTML fails explicitly instead of dropping text or
   assert.equal(writes.length,0);
 });
 
+test('oversized inline HTML stages originals and writes local file references instead of Base64', async () => {
+  let written, stagedCalls = 0;
+  class ClipboardItem { constructor(formats) { this.formats = formats; } }
+  const sent = [];
+  const chrome = { runtime: { sendMessage: async message => {
+    sent.push(message);
+    if (message.type === 'stageClipboardImages') {
+      return { ok: true, data: { batchId: 'batch-20', fileUrls: message.urls.map((unused, index) => `file:///C:/Downloads/X/clipboard/batch-20_${index + 1}.jpg`) } };
+    }
+    return { ok: true, data: true };
+  } } };
+  const dataUrl = 'data:image/jpeg;base64,' + 'A'.repeat(900 * 1024);
+  const images = Array.from({ length: 20 }, (unused, index) => ({ url: `https://pbs.twimg.com/media/BIG${index}?format=jpg&name=orig`, dataUrl }));
+  const sandbox = vm.createContext({ Blob, ClipboardItem, chrome, XCopyCore: require('../core.js'), navigator: { clipboard: { write: async items => { written = items; } } } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../clipboard.js'), 'utf8'), sandbox);
+  await sandbox.XCopyClipboard.writeText({ original: 'Text', postUrl: 'https://x.com/a/status/1', images, onStage: () => stagedCalls++ });
+  assert.equal(stagedCalls, 1);
+  assert.equal(sent[0].type, 'stageClipboardImages');
+  assert.equal(sent[0].urls.length, 20);
+  const html = await written[0].formats['text/html'].text();
+  assert.equal((html.match(/<img/g) || []).length, 20);
+  assert.match(html, /src="file:\/\/\/C:\/Downloads\/X\/clipboard\/batch-20_20.jpg"/);
+  assert.doesNotMatch(html, /base64/);
+  assert.ok(html.length < 4000);
+  assert.ok(sent.some(message => message.type === 'confirmClipboardImages' && message.batchId === 'batch-20'));
+});
+
+test('clipboard failure releases staged originals so they are not left behind', async () => {
+  class ClipboardItem { constructor(formats) { this.formats = formats; } }
+  const sent = [];
+  const chrome = { runtime: { sendMessage: async message => {
+    sent.push(message);
+    if (message.type === 'stageClipboardImages') {
+      return { ok: true, data: { batchId: 'batch-fail', fileUrls: message.urls.map((unused, index) => `file:///C:/Downloads/X/clipboard/batch-fail_${index + 1}.jpg`) } };
+    }
+    return { ok: true, data: true };
+  } } };
+  const dataUrl = 'data:image/jpeg;base64,' + 'B'.repeat(900 * 1024);
+  const images = Array.from({ length: 20 }, (unused, index) => ({ url: `https://pbs.twimg.com/media/FAIL${index}?format=jpg&name=orig`, dataUrl }));
+  const sandbox = vm.createContext({ Blob, ClipboardItem, chrome, XCopyCore: require('../core.js'), navigator: { clipboard: { write: async () => { throw new Error('Document is not focused'); } } } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../clipboard.js'), 'utf8'), sandbox);
+  await assert.rejects(() => sandbox.XCopyClipboard.writeText({ original: 'Text', postUrl: 'https://x.com/a/status/1', images }), /focused/);
+  assert.ok(sent.some(message => message.type === 'releaseClipboardImages' && message.batchId === 'batch-fail'));
+  assert.equal(sent.some(message => message.type === 'confirmClipboardImages'), false);
+});
+
+test('staging failure aborts before any clipboard write', async () => {
+  let writes = 0;
+  class ClipboardItem { constructor(formats) { this.formats = formats; } }
+  const chrome = { runtime: { sendMessage: async () => ({ ok: false, error: '下载目录不可写' }) } };
+  const dataUrl = 'data:image/jpeg;base64,' + 'C'.repeat(900 * 1024);
+  const images = Array.from({ length: 20 }, (unused, index) => ({ url: `https://pbs.twimg.com/media/DISK${index}?format=jpg&name=orig`, dataUrl }));
+  const sandbox = vm.createContext({ Blob, ClipboardItem, chrome, XCopyCore: require('../core.js'), navigator: { clipboard: { write: async () => writes++ } } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../clipboard.js'), 'utf8'), sandbox);
+  await assert.rejects(() => sandbox.XCopyClipboard.writeText({ original: 'Text', postUrl: 'https://x.com/a/status/1', images }), /下载目录不可写/);
+  assert.equal(writes, 0);
+});
+
+test('small inline HTML never contacts the staging worker', async () => {
+  let written, calls = 0;
+  class ClipboardItem { constructor(formats) { this.formats = formats; } }
+  const chrome = { runtime: { sendMessage: async () => { calls++; return { ok: true, data: true }; } } };
+  const sandbox = vm.createContext({ Blob, ClipboardItem, chrome, XCopyCore: require('../core.js'), navigator: { clipboard: { write: async items => { written = items; } } } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../clipboard.js'), 'utf8'), sandbox);
+  await sandbox.XCopyClipboard.writeText({ original: 'Text', postUrl: 'https://x.com/a/status/1', images: [{ url: 'https://pbs.twimg.com/media/SMALL?format=jpg&name=orig', dataUrl: 'data:image/jpeg;base64,AAAA' }] });
+  assert.equal(calls, 0);
+  assert.match(await written[0].formats['text/html'].text(), /data:image\/jpeg;base64,AAAA/);
+});
+
+test('oversized profile batches also use local files and confirm the staged batch', async () => {
+  let written;
+  class ClipboardItem { constructor(formats) { this.formats = formats; } }
+  const sent = [];
+  const chrome = { runtime: { sendMessage: async message => {
+    sent.push(message);
+    if (message.type === 'stageClipboardImages') {
+      return { ok: true, data: { batchId: 'profile-batch', fileUrls: message.urls.map((unused, index) => `file:///C:/Downloads/X/clipboard/profile_${index + 1}.jpg`) } };
+    }
+    return { ok: true, data: true };
+  } } };
+  const dataUrl = 'data:image/jpeg;base64,' + 'D'.repeat(900 * 1024);
+  const images = Array.from({ length: 20 }, (unused, index) => ({ url: `https://pbs.twimg.com/media/PROFILE${index}?format=jpg&name=orig`, dataUrl }));
+  const sandbox = vm.createContext({ Blob, ClipboardItem, chrome, XCopyCore: require('../core.js'), navigator: { clipboard: { write: async items => { written = items; } } } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../clipboard.js'), 'utf8'), sandbox);
+  await sandbox.XCopyClipboard.writeProfile({ name: 'rabi', handle: '@rabiadraw', bio: 'Bio', profileUrl: 'https://x.com/rabiadraw', images });
+  const html = await written[0].formats['text/html'].text();
+  assert.equal((html.match(/<img/g) || []).length, 20);
+  assert.match(html, /src="file:\/\/\/C:\/Downloads\/X\/clipboard\/profile_20.jpg"/);
+  assert.doesNotMatch(html, /base64/);
+  assert.ok(sent.some(message => message.type === 'confirmClipboardImages' && message.batchId === 'profile-batch'));
+});
+
 test('profile copy writes the author block and images as mixed HTML and text', async () => {
   const writes = [];
   class ClipboardItem { constructor(formats) { this.formats = formats; } }

@@ -67,6 +67,18 @@ test('Cat Catch matches exact media identity and never the last video in the tab
   assert.equal(media.matchCaptured([{ type: 'video', url: '', poster: '' }], captured).length, 0);
 });
 
+test('a twenty-photo post keeps every attachment instead of stopping at sixteen', () => {
+  const photos = Array.from({ length: 20 }, (unused, index) => ({
+    id_str: String(1000 + index), type: 'photo',
+    media_url_https: `https://pbs.twimg.com/media/TWENTY${index}.jpg`
+  }));
+  const records = media.collectRecords({ data: { result: { rest_id: '2121344852608884839', legacy: { extended_entities: { media: photos } } } } });
+  assert.equal(records.length, 1);
+  assert.equal(records[0].media.length, 20);
+  assert.deepEqual(records[0].media.map(item => item.url),
+    photos.map(photo => media.originalImageUrl(photo.media_url_https)));
+});
+
 test('invalid metadata and false MIME cannot turn external links into downloads', () => {
   assert.equal(media.normalizeMedia({ type: 'video', video_info: { variants: [{ content_type: 'video/mp4', url: 'https://evil.test/a.mp4' }] } }).url, '');
   assert.deepEqual(media.collectRecords({ nonsense: true }), []);

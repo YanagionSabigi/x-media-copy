@@ -8,7 +8,7 @@
   const mediaTools = globalThis.XCopyMedia;
   const MEDIA_TAB = /^\/([a-zA-Z0-9_]{1,15})\/media\/?$/i;
   const TILE_HREF = /\/status\/\d+(?:\/(?:photo|video)\/\d+)?/;
-  const LIMIT = 20, MAX_BATCH = 16, TOTAL_BYTES = 80 * 1024 ** 2;
+  const LIMIT = 20, MAX_BATCH = 20, TOTAL_BYTES = 80 * 1024 ** 2;
   const selected = new Map();
   const contextError = error => invalidated || /extension context (?:was )?invalidated/i.test(error?.message || "");
   let invalidated = false, mode = false, busy = false, toolbar, countNode, copyNode, toggleNode;
@@ -311,7 +311,7 @@ let layer = null, keyOwners = null, marked = [];
     try {
       return await send({ type: "prepareImages", urls, owner });
     } catch (error) {
-      // The worker caps a batch at 16 URLs and 24 MiB; halve it until it fits.
+      // The worker caps a batch at 20 URLs and 24 MiB; halve it until it fits.
       if (urls.length === 1 || !/24 MiB|过大|图片列表无效/.test(error?.message || "")) throw error;
       const middle = Math.ceil(urls.length / 2);
       return [...await readGroup(urls.slice(0, middle), owner), ...await readGroup(urls.slice(middle), owner)];
@@ -373,7 +373,8 @@ let layer = null, keyOwners = null, marked = [];
         bio: author.bio,
         bioTranslation: author.bioTranslation,
         profileUrl: `https://x.com/${handle}`,
-        images
+        images,
+        onStage: () => toast("原图较多，正在保存本地副本以便 QQ 完整粘贴，请保持此页激活")
       });
       toast(`已复制作者信息与 ${images.length} 张原图（${entries.length} 帖），可粘贴`);
     } catch (error) {

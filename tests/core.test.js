@@ -19,6 +19,31 @@ test('local merged clipboard references reject remote hosts and unrelated image 
   assert.throws(()=>core.buildClipboardPayload({images:[image],mergedImageFileUrl:'file:///C:/a.png'}),/本地/);
 });
 
+test('each original can use its own staged local file when HTML would exceed QQ limits', () => {
+  const images = [
+    { dataUrl: 'data:image/jpeg;base64,AAAA', fileUrl: 'file:///C:/Downloads/X/clipboard/batch_1.jpg' },
+    { dataUrl: 'data:image/png;base64,BBBB', fileUrl: 'file:///C:/Downloads/X/clipboard/batch_2.png' }
+  ];
+  const result = core.buildClipboardPayload({ original: 'Source', translation: '译文', postUrl: 'https://x.com/a/status/1', images });
+  assert.match(result.html, /src="file:\/\/\/C:\/Downloads\/X\/clipboard\/batch_1.jpg"/);
+  assert.match(result.html, /src="file:\/\/\/C:\/Downloads\/X\/clipboard\/batch_2.png"/);
+  assert.doesNotMatch(result.html, /base64/);
+  assert.ok(result.html.length < 1000);
+  for (const fileUrl of ['https://evil.test/a.jpg', 'file://server/share/a.jpg', 'file:///C:/a.html', 'file:///C:/a.jpg?x=1', 'javascript:alert(1)']) {
+    assert.throws(() => core.buildClipboardPayload({ images: [{ dataUrl: 'data:image/jpeg;base64,AAAA', fileUrl }] }), /本地/);
+  }
+});
+
+test('profile images can use staged local files without losing the author block order', () => {
+  const result = core.buildProfilePayload({
+    name: 'rabi', handle: '@rabiadraw', bio: 'Bio', profileUrl: 'https://x.com/rabiadraw',
+    images: [{ dataUrl: 'data:image/jpeg;base64,AAAA', fileUrl: 'file:///C:/Downloads/X/clipboard/p_1.jpg' }]
+  });
+  assert.match(result.html, /src="file:\/\/\/C:\/Downloads\/X\/clipboard\/p_1.jpg"/);
+  assert.doesNotMatch(result.html, /base64/);
+  assert.ok(result.html.indexOf('@rabiadraw') < result.html.indexOf('<img'));
+});
+
 test('GIF clipboard leaves one empty insertion line before the source in both formats', () => {
   const result = core.buildClipboardPayload({ original: 'Source <text> #art', translation: '中文 & 译文 #艺术', postUrl: 'https://x.com/a/status/123?s=20', reserveGifLine: true });
   assert.equal(result.plain, 'Source <text>\n\n中文 & 译文\n\nhttps://x.com/a/status/123');
