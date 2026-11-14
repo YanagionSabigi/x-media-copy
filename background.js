@@ -380,6 +380,14 @@ if (typeof importScripts === 'function') importScripts('media.js');
         job.error = job.status === 'failed' ? `下载中断：${delta.error?.current || '请重试'}` : '';
         job.stage = '';
       }
+      if (job.status === 'complete') {
+        try {
+          const [item] = await api.downloads.search({ id: job.downloadId });
+          const fileUrl = localFileUrl(item?.filename);
+          if (item?.exists !== false && fileUrl) job.fileUrl = fileUrl;
+          else delete job.fileUrl;
+        } catch { delete job.fileUrl; }
+      } else delete job.fileUrl;
       await save(job);
       if (job.extension === 'gif') try { await offscreen({ type: 'releaseBlob', jobId: job.id }); } catch { /* No surviving offscreen document. */ }
     }
@@ -653,7 +661,7 @@ if (typeof importScripts === 'function') importScripts('media.js');
           if (ACTIVE.has(job.status)) return { ...job };
           if (!media.validVideoUrl(job.url)) throw new Error('没有完整 MP4 地址，请回到原帖播放媒体后重新点击');
           job.generation = (job.generation || 0) + 1;
-          job.status = 'queued'; job.error = ''; delete job.downloadId;
+          job.status = 'queued'; job.error = ''; delete job.downloadId; delete job.fileUrl;
           if (message.type === 'retryMp4') job.format = 'mp4';
           await save(job);
           schedule(job);

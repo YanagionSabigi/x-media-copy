@@ -14,6 +14,7 @@
   let pageActive = !document.hidden, pagePath = location.pathname + location.search;
   let visibilityObserver, idleTask, activeAuto;
   let copying = false;
+  let gifClipboardToken = 0;
   let invalidated = false;
   const contextError = error => invalidated || /extension context (?:was )?invalidated/i.test(error?.message || '');
   function assertContext() {
@@ -319,6 +320,44 @@
     }
     return "unconfirmed";
   }
+  async function waitForGifJobs(ids, token, epoch) {
+    const deadline = Date.now() + 11 * 60 * 1000;
+    while (Date.now() < deadline) {
+      if (invalidated || token !== gifClipboardToken || epoch !== imageEpoch) return null;
+      let jobs;
+      try { jobs = (await send({ type: 'getJobs' })).filter(job => ids.includes(job.id)); }
+      catch { return null; }
+      if (jobs.length === ids.length && jobs.every(job => ['complete', 'failed', 'cancelled'].includes(job.status))) return jobs;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    return null;
+  }
+  // Keep the text clipboard immediately, then upgrade it with local GIF file
+  // URLs once the conversion/download completes. The user waits for the toast
+  // and can paste text and animated GIF in one go.
+  async function watchGifClipboard(jobs, texts, postUrl, token, epoch) {
+    const result = await waitForGifJobs(jobs.map(job => job.id), token, epoch);
+    if (!result || invalidated || token !== gifClipboardToken || epoch !== imageEpoch) return;
+    const complete = result.filter(job => job.status === 'complete' && job.fileUrl)
+      .sort((a, b) => (a.index || 0) - (b.index || 0));
+    const failed = result.filter(job => job.status !== 'complete' || !job.fileUrl);
+    if (!complete.length) {
+      toast(failed.map(job => job.error).filter(Boolean).join('；') || 'GIF 制作失败，未能加入剪贴板', true);
+      return;
+    }
+    try {
+      const written = await runCopy(async () => {
+        if (invalidated || token !== gifClipboardToken || epoch !== imageEpoch) return false;
+        assertContext();
+        await clipboard.writeText({ ...texts, postUrl, reserveGifLine: true, gifFileUrls: complete.map(job => job.fileUrl) });
+        return true;
+      });
+      if (written) toast(`GIF 已就绪，剪贴板已更新，可直接粘贴到聊天窗口${failed.length ? `（${failed.length} 个未完成）` : ''}`, failed.length > 0);
+    } catch (error) {
+      if (contextError(error) || copying || token !== gifClipboardToken) return;
+      toast(`GIF 已下载，但剪贴板更新失败：${error.message}；可在下载目录拖入聊天窗口`, true);
+    }
+  }
   async function copyAndLike(data, sourcePostUrl = data.postUrl, epoch = imageEpoch) {
     let images;
     if (data.imageRead) { await data.imageRead.promise; images = data.imageRead.images; discardImageRead(data.imageRead); }
@@ -391,6 +430,7 @@
   }
   async function handleCopy(article, button, originalOnly = false, mergePhotos = false) {
     if (copying || button.disabled) { toast("正在复制，请稍候"); return; }
+    gifClipboardToken++;
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     button.setAttribute("aria-label", "正在读取并复制贴文");
@@ -425,11 +465,12 @@
   function convertible(item) { return item.type === 'video' || item.type === 'animated_gif'; }
   async function handleGif(article, button, sourceMode = false) {
     if (copying || button.disabled) { toast('正在复制，请稍候'); return; }
+    const token = ++gifClipboardToken;
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
     const gifMode = sourceMode ? 'source' : 'slim';
     const gifLabel = sourceMode ? '源视频 GIF' : '瘦身 GIF';
-    let copied = false;
+    let copied = false, pendingGif = null;
     try {
       await runCopy(async () => {
         assertContext();
@@ -449,7 +490,7 @@
         await clipboard.writeText({ ...texts, postUrl, reserveGifLine: true });
         assertPage(epoch);
         copied = true;
-        toast(`已复制，可粘贴；正在提交${gifLabel}下载`);
+        toast('已复制文字；GIF 完成后会自动加入剪贴板，请等待「GIF 已就绪」提示');
         // Preserve the source snapshot once copying succeeds, including when
         // the page is hidden while resolving its original MP4 address.
         const downloadPromise = (async () => {
@@ -469,8 +510,9 @@
         const message = `已复制贴文、译文和出处链接（${likeText}）`;
         try {
           const jobs = await downloadPromise;
+          pendingGif = { jobs, texts, postUrl, token, epoch };
           const failed = jobs.filter(job => job.status === 'failed');
-          toast(`${message}；${failed.length ? failed.map(job => job.error).join('；') : `已提交 ${jobs.length} 个${gifLabel}下载任务，可在扩展图标中查看或取消`}`, failed.length > 0 || ['unavailable', 'unconfirmed'].includes(status));
+          toast(`${message}；${failed.length ? failed.map(job => job.error).join('；') : `正在制作 ${jobs.length} 个${gifLabel}，完成后会自动加入剪贴板`}`, failed.length > 0 || ['unavailable', 'unconfirmed'].includes(status));
         } catch (error) {
           if (contextError(error)) throw error;
           toast(`${message}；GIF 下载未启动：${error.message}`, true);
@@ -480,7 +522,10 @@
       if (copied && !contextError(error)) toast(`已复制，可粘贴；GIF 下载未启动：${error.message}`, true);
       else showError(error);
     }
-    finally { button.disabled = false; button.removeAttribute('aria-busy'); }
+    finally {
+      if (pendingGif && pendingGif.jobs.length && pendingGif.jobs.every(job => job.id)) void watchGifClipboard(pendingGif.jobs, pendingGif.texts, pendingGif.postUrl, pendingGif.token, pendingGif.epoch);
+      button.disabled = false; button.removeAttribute('aria-busy');
+    }
   }
   function syncGifButton(article, group, postUrl) {
     let button = [...article.querySelectorAll('.x-copy-gif-button')].find(node => node.closest('article') === article);

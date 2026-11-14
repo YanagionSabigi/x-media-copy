@@ -77,7 +77,16 @@
     } catch { return ''; }
   }
 
-  function buildClipboardPayload({ original, translation, postUrl, images = [], reserveGifLine = false, mergedImage = null, mergedImageFileUrl = '' }) {
+  function gifFileUrl(raw) {
+    try {
+      const url = new URL(raw);
+      if (url.protocol !== 'file:' || url.hostname || url.search || url.hash ||
+          !/\.gif$/i.test(url.pathname)) return '';
+      return url.href;
+    } catch { return ''; }
+  }
+
+  function buildClipboardPayload({ original, translation, postUrl, images = [], gifFileUrls = [], reserveGifLine = false, mergedImage = null, mergedImageFileUrl = '' }) {
     original = stripHashtags(original);
     translation = stripHashtags(translation);
     postUrl = canonicalPostUrl(postUrl);
@@ -105,9 +114,16 @@
         imageHtml += `<img src="${escapeHtml(local || item.dataUrl)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
       }
     }
+    if (!Array.isArray(gifFileUrls)) throw new Error('GIF 文件列表无效');
+    let gifHtml = '';
+    for (const raw of gifFileUrls) {
+      const local = gifFileUrl(raw);
+      if (!local) throw new Error('GIF 的本地文件引用无效');
+      gifHtml += `<img src="${escapeHtml(local)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
+    }
     const body = htmlSections.join('<br><br>');
     const link = postUrl ? `<a href="${escapeHtml(postUrl)}">${escapeHtml(postUrl)}</a>` : '';
-    const content = [body, imageHtml].filter(Boolean).join('<br>');
+    const content = [body, imageHtml, gifHtml].filter(Boolean).join('<br>');
     return { plain, html: `<div>${[content, link].filter(Boolean).join(reserveGifLine ? '<br><br>' : '<br>')}</div>` };
   }
 

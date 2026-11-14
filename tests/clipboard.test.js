@@ -190,6 +190,17 @@ test('oversized profile batches also use local files and confirm the staged batc
   assert.ok(sent.some(message => message.type === 'confirmClipboardImages' && message.batchId === 'profile-batch'));
 });
 
+test('GIF file reference is written into the mixed clipboard with the reserved line', async () => {
+  let written;
+  class ClipboardItem { constructor(formats) { this.formats = formats; } }
+  const sandbox = vm.createContext({ Blob, ClipboardItem, XCopyCore: require('../core.js'), navigator: { clipboard: { write: async items => { written = items; } } } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../clipboard.js'), 'utf8'), sandbox);
+  await sandbox.XCopyClipboard.writeText({ original: 'cat wave', postUrl: 'https://x.com/a/status/1', reserveGifLine: true, gifFileUrls: ['file:///C:/Downloads/X/1.gif'] });
+  const html = await written[0].formats['text/html'].text();
+  assert.match(html, /<img[^>]+file:\/\/\/C:\/Downloads\/X\/1\.gif/);
+  assert.equal(await written[0].formats['text/plain'].text(), 'cat wave\n\nhttps://x.com/a/status/1');
+});
+
 test('profile copy writes the author block and images as mixed HTML and text', async () => {
   const writes = [];
   class ClipboardItem { constructor(formats) { this.formats = formats; } }

@@ -44,6 +44,23 @@ test('profile images can use staged local files without losing the author block 
   assert.ok(result.html.indexOf('@rabiadraw') < result.html.indexOf('<img'));
 });
 
+test('GIF files are referenced by local path with the reserved insertion line', () => {
+  const result = core.buildClipboardPayload({
+    original: 'cat wave', postUrl: 'https://x.com/a/status/1', reserveGifLine: true,
+    gifFileUrls: ['file:///C:/Downloads/X/1.gif', 'file:///C:/Downloads/X/2.gif']
+  });
+  assert.equal(result.plain, 'cat wave\n\nhttps://x.com/a/status/1');
+  assert.equal((result.html.match(/<img/g) || []).length, 2);
+  assert.match(result.html, /src="file:\/\/\/C:\/Downloads\/X\/1.gif"/);
+  assert.match(result.html, /src="file:\/\/\/C:\/Downloads\/X\/2.gif"/);
+  assert.match(result.html, /cat wave<br><img[^>]+1\.gif[^>]*><img[^>]+2\.gif[^>]*><br><br><a href/);
+  assert.doesNotMatch(result.html, /base64/);
+  for (const gifFileUrl of ['https://evil.test/a.gif', 'file://server/share/a.gif', 'file:///C:/a.png', 'file:///C:/a.gif?x=1', 'javascript:alert(1)']) {
+    assert.throws(() => core.buildClipboardPayload({ gifFileUrls: [gifFileUrl] }), /GIF 的本地/);
+  }
+  assert.throws(() => core.buildClipboardPayload({ gifFileUrls: 'file:///C:/a.gif' }), /GIF 文件列表/);
+});
+
 test('GIF clipboard leaves one empty insertion line before the source in both formats', () => {
   const result = core.buildClipboardPayload({ original: 'Source <text> #art', translation: '中文 & 译文 #艺术', postUrl: 'https://x.com/a/status/123?s=20', reserveGifLine: true });
   assert.equal(result.plain, 'Source <text>\n\n中文 & 译文\n\nhttps://x.com/a/status/123');

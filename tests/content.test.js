@@ -84,6 +84,29 @@ test('GIF button copies text, likes the post and downloads one slim GIF', async 
   } finally { setup.dom.window.close(); }
 });
 
+test('GIF clipboard upgrades to the local GIF file after conversion completes', async () => {
+  const calls = [];
+  const gifJob = { id: 'gif-1', status: 'queued', index: 0, extension: 'gif' };
+  const setup = fixture(`<article><div data-testid="tweetText">Original #art</div><div data-testid="tweetText">译文 #艺术</div><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, {
+    media: true,
+    message: request => {
+      calls.push(request);
+      if (request.type === 'downloadMedia') return [gifJob];
+      if (request.type === 'getJobs') return [{ ...gifJob, status: 'complete', fileUrl: 'file:///C:/Downloads/X/1.gif' }];
+      return true;
+    }
+  });
+  try {
+    setup.document.querySelector('.x-copy-gif-button').click();
+    await tick(700);
+    assert.equal(setup.writes.length, 2);
+    assert.doesNotMatch(setup.writes[0].html, /<img/);
+    assert.match(setup.writes[1].html, /<img[^>]+file:\/\/\/C:\/Downloads\/X\/1\.gif/);
+    assert.equal(setup.writes[1].plain, 'Original\n\n译文\n\nhttps://x.com/a/status/1');
+    assert.match(setup.document.querySelector('.x-copy-toast').textContent, /GIF 已就绪/);
+  } finally { setup.dom.window.close(); }
+});
+
 test('GIF copy still likes when download submission fails', async () => {
   const setup = fixture(`<article><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, {
     media: true, message: () => { throw new Error('下载任务过多，请等待现有任务结束'); }
@@ -111,7 +134,7 @@ test('GIF copy likes before slow media resolution and keeps downloading after sw
     setup.document.querySelector('.x-copy-gif-button').click(); await tick(20);
     assert.equal(setup.writes.length, 1);
     assert.equal(setup.likes.length, 1);
-    assert.match(setup.document.querySelector('.x-copy-toast').textContent, /已复制.*可粘贴/);
+    assert.match(setup.document.querySelector('.x-copy-toast').textContent, /已复制文字.*GIF 完成后/);
     setup.visibility(true);
     resolveMedia([{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }]);
     await tick(20);

@@ -2,13 +2,13 @@
 
 Chrome 扩展，在 X 推文底部添加复制与 GIF 按钮。把原文、页面译文、原图和出处一起复制到聊天窗口或文档，也可以下载 MP4，或把视频和动图制作成 GIF。
 
-当前版本 **1.4.1**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
+当前版本 **1.5.0**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
 
 ## 安装
 
 需要 Chrome 116 或以上版本，以及能正常访问 X 的网络环境。
 
-1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.4.1.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
+1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.5.0.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
 2. 在 Chrome 地址栏输入 `chrome://extensions`，打开右上角的「开发者模式」。
 3. 点击「加载已解压的扩展程序」，选择直接包含 `manifest.json` 的文件夹。
 4. 打开或刷新 `https://x.com/`、`https://twitter.com/` 页面。
@@ -41,11 +41,11 @@ X 推文底部最右侧的复制按钮支持以下操作：
 | 直接点击 | 瘦身 GIF | 10 fps、宽度最多 480 px、128 色调色板预算；较窄视频不放大 |
 | Alt + 点击 | 源视频 GIF | 保留源帧率和原尺寸，使用完整的 256 色调色板预算 |
 
-**两种方式都复制原文、译文和出处链接，并自动点赞。** GIF 按钮上的 Alt 用来选择源视频模式，仍保留译文。复制成功后，点赞与下载任务并行进行；下载提交失败不会阻止点赞，已点赞的帖子保持原状态。
+**两种方式都复制原文、译文和出处链接，并自动点赞。** GIF 按钮上的 Alt 用来选择源视频模式，仍保留译文。复制成功后先写入文字；GIF 在后台转换并下载完成后，剪贴板会自动更新，把该 GIF 的本地文件引用加入 HTML。看到「GIF 已就绪」提示后，一次粘贴即可同时发送文字和 GIF。若页面失焦或剪贴板更新失败，GIF 仍在下载目录，可手动拖入；文字不会丢失。
 
-GIF 无音频、循环播放，保留视频时长，但受格式时间精度限制。GIF 文件下载后手动拖入聊天窗口；按钮不把动图写入剪贴板，也不同时下载 MP4 或复制静态附件。普通视频需要原始 MP4 时，点击复制按钮。
+GIF 无音频、循环播放，保留视频时长，但受格式时间精度限制。按钮不同时下载 MP4 或复制静态附件。普通视频需要原始 MP4 时，点击复制按钮。
 
-复制内容在译文与出处之间留一个空白行，供手动插入下载的 GIF：
+复制内容在译文与出处之间保留一个空白行；GIF 完成后，HTML 会把本地 GIF 放在这个位置：
 
 ```text
 Original text
@@ -98,7 +98,7 @@ https://x.com/rabiadraw
 ## 常见问题
 
 - **更新后按钮失效**：重新加载扩展后，还需要刷新 X 页面。
-- **微信 / QQ 没有一起粘贴图片**：混合图文的接收方式取决于客户端。GIF 和视频下载后可拖入聊天窗口。
+- **微信 / QQ 没有一起粘贴图片**：混合图文的接收方式取决于客户端。GIF 和视频下载后可拖入聊天窗口；GIF 按钮会在完成后尝试把本地 GIF 自动加入剪贴板。
 - **多图无法合成**：合图按附件顺序推断布局，轻微尺寸差异会补透明边；尺寸差异过大或超过上限时会提示失败，可改用普通点击复制各张图片。
 - **视频没有下载**：目前需要完整 MP4 地址，仅有 HLS 流时可用 [猫抓 Cat Catch](https://github.com/xifangczy/cat-catch) 等工具处理。
 

@@ -385,6 +385,16 @@ test('downloads start after request but complete only after browser completion e
   assert.equal((await service.handle({ type: 'getJobs' }, popup))[0].status, 'complete');
 });
 
+test('completed GIF download exposes its local file URL for clipboard upgrades', async () => {
+  const { service, api } = setup({ convert: async () => ({ ok: true, url: 'blob:chrome-extension://extension/gif' }) });
+  api.downloads.search = async ({ id }) => [{ id, state: 'complete', exists: true, filename: 'C:\\Downloads\\X\\123_1.gif' }];
+  await service.handle({ type: 'downloadMedia', format: 'gif', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] }, page);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const [job] = await service.handle({ type: 'getJobs' }, popup);
+  assert.equal(job.status, 'complete');
+  assert.equal(job.fileUrl, 'file:///C:/Downloads/X/123_1.gif');
+});
+
 test('interrupted download reports failure and cancellation is terminal', async () => {
   const { service, change } = setup();
   await service.handle({ type: 'downloadMedia', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4' }] }, page);
