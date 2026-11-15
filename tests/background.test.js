@@ -326,6 +326,29 @@ test('staging rejects a twenty-first original and non-page senders before downlo
   assert.equal(calls.length, 0);
 });
 
+test('staged GIF-mode photos use the post media numbering', async () => {
+  let next = 0;
+  const downloads = new Map();
+  const { service, api } = setup({ fetch: async () => imageResponse() });
+  api.downloads.download = async args => {
+    const id = ++next;
+    downloads.set(id, `C:\\Downloads\\X\\clipboard\\${args.filename.split('/').pop()}`);
+    return id;
+  };
+  api.downloads.search = async ({ id }) => [{ id, state: 'complete', exists: true, filename: downloads.get(id) }];
+  api.downloads.removeFile = async id => { downloads.delete(id); };
+  const staged = await service.handle({ type: 'stageClipboardImages', urls: [originalUrl('PHOTO')], postId: '123', mediaIndexes: [11] }, page);
+  assert.match(staged.fileUrls[0], /^file:\/\/\/C:\/Downloads\/X\/clipboard\/123_12\.png$/);
+  await service.handle({ type: 'releaseClipboardImages', batchId: staged.batchId }, page);
+});
+
+test('GIF jobs keep the original media position in their local filename', async () => {
+  const { service, calls } = setup();
+  await service.handle({ type: 'downloadMedia', format: 'gif', postId: '123', media: [{ type: 'video', url: 'https://video.twimg.com/ext_tw_video/11/a.mp4', mediaIndex: 11 }] }, page);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.match(calls[0].filename, /^X\/123_12\.gif$/);
+});
+
 test('orig fetch rejects a redirected thumbnail instead of silently copying it', async () => {
   const response = new Response('image', { headers: { 'content-type': 'image/png' } });
   Object.defineProperty(response, 'url', { value: 'https://pbs.twimg.com/media/ABC?format=png&name=small' });

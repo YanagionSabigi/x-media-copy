@@ -130,6 +130,34 @@ test('a post with nineteen GIFs upgrades the clipboard with every local file in 
   } finally { setup.dom.window.close(); }
 });
 
+test('GIF mode also stages static photos and keeps media order with numbering', async () => {
+  const calls = [];
+  const gifJob = { id: 'gif-photo', status: 'queued', index: 1, extension: 'gif' };
+  const setup = fixture(`<article><div data-testid="tweetText">20</div><img src="https://pbs.twimg.com/media/STILL.jpg"><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, {
+    media: true,
+    message: request => {
+      calls.push(request);
+      if (request.type === 'downloadMedia') return [gifJob];
+      if (request.type === 'getJobs') return [{ ...gifJob, status: 'complete', fileUrl: 'file:///C:/Downloads/X/1_2.gif' }];
+      if (request.type === 'stageClipboardImages') {
+        assert.deepEqual(request.mediaIndexes, [0]);
+        return { batchId: 'photo-batch', fileUrls: ['file:///C:/Downloads/X/clipboard/1_1.jpg'] };
+      }
+      return true;
+    }
+  });
+  try {
+    setup.document.querySelector('.x-copy-gif-button').click();
+    await tick(700);
+    assert.equal(setup.writes.length, 2);
+    const html = setup.writes[1].html;
+    assert.equal((html.match(/<img/g) || []).length, 2);
+    assert.ok(html.indexOf('1_1.jpg') < html.indexOf('1_2.gif'));
+    assert.match(setup.document.querySelector('.x-copy-toast').textContent, /含 1 张静态图/);
+    assert.ok(calls.some(request => request.type === 'confirmClipboardImages' && request.batchId === 'photo-batch'));
+  } finally { setup.dom.window.close(); }
+});
+
 test('GIF copy still likes when download submission fails', async () => {
   const setup = fixture(`<article><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, {
     media: true, message: () => { throw new Error('下载任务过多，请等待现有任务结束'); }
@@ -679,20 +707,21 @@ test("unconfirmed like reports the copied text accurately and makes no automatic
   } finally { dom.window.close(); }
 });
 
-test('Alt copies original with images and clean source without translation or preview', async () => {
+test('Alt copies only original, translation and source without images or media downloads', async () => {
   const calls = [];
-  const { dom, document, likes, writes } = fixture(`<article><div data-testid="tweetText">Source</div><div data-testid="tweetText">中文译文</div><img src="https://pbs.twimg.com/media/PHOTO?format=png&name=small">${link(1)}${bar}</article>`, {
-    media: true, message: request => { calls.push(request); return request.type === 'prepareImages' ? [{ dataUrl: 'data:image/png;base64,AAAA', width: 2000, height: 1000 }] : []; }
+  const { dom, document, likes, writes } = fixture(`<article><div data-testid="tweetText">Source</div><div data-testid="tweetText">中文译文</div><img src="https://pbs.twimg.com/media/PHOTO?format=png&name=small"><video src="https://video.twimg.com/ext_tw_video/11/a.mp4"></video>${link(1)}${bar}</article>`, {
+    media: true, message: request => { calls.push(request); return request.urls ? imageResult(request) : true; }
   });
   try {
     document.querySelector('.x-copy-post-button').dispatchEvent(new dom.window.MouseEvent('click', { altKey: true }));
-    await tick(20);
+    await tick(30);
     assert.equal(document.querySelector('[role="dialog"]'), null);
-    assert.equal(calls[0].type, 'prepareImages');
-    assert.match(calls[0].urls[0], /name=orig/);
-    assert.match(writes[0].html, /<img/);
-    assert.equal(writes[0].plain, 'Source\nhttps://x.com/a/status/1');
-    assert.doesNotMatch(writes[0].html, /中文译文/);
+    assert.equal(calls.some(request => request.type === 'prepareImages'), false);
+    assert.equal(calls.some(request => request.type === 'downloadMedia'), false);
+    assert.equal(writes.length, 1);
+    assert.doesNotMatch(writes[0].html, /<img/);
+    assert.equal(writes[0].plain, 'Source\n\n中文译文\nhttps://x.com/a/status/1');
+    assert.match(writes[0].html, /中文译文/);
     assert.equal(likes.length, 1);
   } finally { dom.window.close(); }
 });
@@ -792,7 +821,7 @@ test('Shift merge failure leaves clipboard and like untouched and button can be 
   } finally { setup.dom.window.close(); }
 });
 
-test('Alt+Shift merges while omitting translation; ordinary and Alt clicks retain separate photos', async () => {
+test('Alt+Shift merges while omitting translation; ordinary keeps photos and Alt copies text only', async () => {
   const setup = fixture(photoPost(1, '<img src="https://pbs.twimg.com/media/SECOND.jpg"><div data-testid="tweetText">Source</div><div data-testid="tweetText">译文</div>'), {
     media: true, mergeImages: async () => [{ dataUrl: 'data:image/png;base64,TUVSR0VE' }],
     message: request => request.urls ? imageResult(request) : true
@@ -802,10 +831,10 @@ test('Alt+Shift merges while omitting translation; ordinary and Alt clicks retai
     for (const modifiers of [{ altKey: true, shiftKey: true }, {}, { altKey: true }]) {
       button.dispatchEvent(new setup.dom.window.MouseEvent('click', modifiers)); await tick(30);
     }
-    assert.deepEqual(setup.writes.map(write => (write.html.match(/<img /g) || []).length), [1, 2, 2]);
+    assert.deepEqual(setup.writes.map(write => (write.html.match(/<img /g) || []).length), [1, 2, 0]);
     assert.equal(setup.writes[0].plain, 'Source\nhttps://x.com/a/status/1');
     assert.equal(setup.writes[1].plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
-    assert.equal(setup.writes[2].plain, 'Source\nhttps://x.com/a/status/1');
+    assert.equal(setup.writes[2].plain, 'Source\n\n译文\nhttps://x.com/a/status/1');
     assert.equal(setup.likes.length, 1);
   } finally { setup.dom.window.close(); }
 });

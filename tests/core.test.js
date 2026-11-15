@@ -44,6 +44,13 @@ test('profile images can use staged local files without losing the author block 
   assert.ok(result.html.indexOf('@rabiadraw') < result.html.indexOf('<img'));
 });
 
+test('file-only image references are included without Base64', () => {
+  const result = core.buildClipboardPayload({ images: [{ fileUrl: 'file:///C:/Downloads/X/clipboard/123_12.jpg' }] });
+  assert.match(result.html, /src="file:\/\/\/C:\/Downloads\/X\/clipboard\/123_12\.jpg"/);
+  assert.doesNotMatch(result.html, /base64/);
+  assert.throws(() => core.buildClipboardPayload({ images: [{ fileUrl: 'https://evil.test/a.jpg' }] }), /本地/);
+});
+
 test('GIF files are referenced by local path with the reserved insertion line', () => {
   const result = core.buildClipboardPayload({
     original: 'cat wave', postUrl: 'https://x.com/a/status/1', reserveGifLine: true,

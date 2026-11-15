@@ -335,36 +335,63 @@
   // Keep the text clipboard immediately, then upgrade it with local GIF file
   // URLs once the conversion/download completes. The user waits for the toast
   // and can paste text and animated GIF in one go.
-  async function watchGifClipboard(jobs, texts, postUrl, token, epoch) {
+  async function watchGifClipboard(pending) {
+    const { jobs, texts, postUrl, postId, photos, token, epoch } = pending;
     const result = await waitForGifJobs(jobs.map(job => job.id), token, epoch);
     if (!result || invalidated || token !== gifClipboardToken || epoch !== imageEpoch) return;
     const complete = result.filter(job => job.status === 'complete' && job.fileUrl)
       .sort((a, b) => (a.index || 0) - (b.index || 0));
     const failed = result.filter(job => job.status !== 'complete' || !job.fileUrl);
-    if (!complete.length) {
-      toast(failed.map(job => job.error).filter(Boolean).join('；') || 'GIF 制作失败，未能加入剪贴板', true);
+    let imageFiles = [], batchId = null, staged = null, photoError = null;
+    if (photos.length) {
+      try {
+        staged = await send({ type: 'stageClipboardImages', urls: photos.map(item => item.url), postId, mediaIndexes: photos.map(item => item.mediaIndex) });
+        if (staged?.batchId && Array.isArray(staged.fileUrls) && staged.fileUrls.length === photos.length) {
+          batchId = staged.batchId;
+          imageFiles = staged.fileUrls;
+        } else if (staged?.batchId) await send({ type: 'releaseClipboardImages', batchId: staged.batchId }).catch(() => {});
+      } catch (error) {
+        if (contextError(error)) return;
+        photoError = error;
+      }
+    }
+    const ordered = [
+      ...imageFiles.map((fileUrl, index) => ({ index: photos[index].mediaIndex, fileUrl })),
+      ...complete.map(job => ({ index: job.index, fileUrl: job.fileUrl }))
+    ].sort((a, b) => (a.index || 0) - (b.index || 0));
+    const images = ordered.map(item => ({ fileUrl: item.fileUrl }));
+    if (!complete.length && !images.length) {
+      toast(failed.map(job => job.error).filter(Boolean).join('；') || photoError?.message || 'GIF 制作失败，未能加入剪贴板', true);
+      if (batchId) await send({ type: 'releaseClipboardImages', batchId }).catch(() => {});
       return;
     }
     try {
       const written = await runCopy(async () => {
         if (invalidated || token !== gifClipboardToken || epoch !== imageEpoch) return false;
         assertContext();
-        await clipboard.writeText({ ...texts, postUrl, reserveGifLine: true, gifFileUrls: complete.map(job => job.fileUrl) });
+        await clipboard.writeText({ ...texts, postUrl, reserveGifLine: true, images });
         return true;
       });
-      if (written) toast(`GIF 已就绪，剪贴板已更新，可直接粘贴到聊天窗口${failed.length ? `（${failed.length} 个未完成）` : ''}`, failed.length > 0);
+      if (written) {
+        if (batchId) await send({ type: 'confirmClipboardImages', batchId }).catch(() => {});
+        const ready = complete.length ? 'GIF 已就绪，剪贴板已更新' : '静态图已加入剪贴板，但 GIF 未完成';
+        toast(`${ready}，可直接粘贴到聊天窗口${failed.length ? `（${failed.length} 个未完成）` : ''}${imageFiles.length ? `（含 ${imageFiles.length} 张静态图）` : ''}${photoError ? `；静态图未加入：${photoError.message}` : ''}`, failed.length > 0 || !!photoError);
+      } else if (batchId) await send({ type: 'releaseClipboardImages', batchId }).catch(() => {});
     } catch (error) {
+      if (batchId) await send({ type: 'releaseClipboardImages', batchId }).catch(() => {});
       if (contextError(error) || copying || token !== gifClipboardToken) return;
       toast(`GIF 已下载，但剪贴板更新失败：${error.message}；可在下载目录拖入聊天窗口`, true);
     }
   }
   async function copyAndLike(data, sourcePostUrl = data.postUrl, epoch = imageEpoch) {
-    let images;
-    if (data.imageRead) { await data.imageRead.promise; images = data.imageRead.images; discardImageRead(data.imageRead); }
-    else images = await prepareImages((data.media || []).filter(item => item.type === 'photo'), sourcePostUrl, epoch);
+    let images = [];
+    if (!data.textOnly) {
+      if (data.imageRead) { await data.imageRead.promise; images = data.imageRead.images; discardImageRead(data.imageRead); }
+      else images = await prepareImages((data.media || []).filter(item => item.type === 'photo'), sourcePostUrl, epoch);
+    }
     assertPage(epoch);
     if (!findPost(sourcePostUrl)) { const error = new Error('帖子已离开页面，请在原帖上重试'); error.stalePage = true; throw error; }
-    const merging = data.mergePhotos && images.length > 1;
+    const merging = !data.textOnly && data.mergePhotos && images.length > 1;
     let mergedImageFileUrl = '', mergedDownloadId;
     try {
       if (merging) {
@@ -392,8 +419,8 @@
     // copy while waiting for like confirmation or optional media resolution.
     images = null;
     assertPage(epoch);
-    toast('已复制，可粘贴；正在确认点赞状态');
-    const videos = (data.media || []).filter(item => item.type !== 'photo');
+    toast(data.textOnly ? '文案已复制，可粘贴；正在确认点赞状态' : '已复制，可粘贴；正在确认点赞状态');
+    const videos = data.textOnly ? [] : (data.media || []).filter(item => item.type !== 'photo');
     // Once copying succeeds, hand explicit media intent to the worker now.
     // Hiding the page may end like confirmation and clear photo caches later.
     const downloadPromise = videos.length ? (async () => {
@@ -420,20 +447,20 @@
       status = "unconfirmed";
     }
     const message = {
-      liked: "已复制贴文和出处链接，并已点赞",
-      "already-liked": "已复制贴文和出处链接（该帖已点赞）",
-      unavailable: "已复制贴文和出处链接；未找到可用的点赞按钮",
-      unconfirmed: "已复制贴文和出处链接；未能确认点赞，请检查页面"
+      liked: data.textOnly ? '已复制原文、译文和出处链接，并已点赞（未触发媒体下载）' : '已复制贴文和出处链接，并已点赞',
+      "already-liked": data.textOnly ? '已复制原文、译文和出处链接（该帖已点赞；未触发媒体下载）' : '已复制贴文和出处链接（该帖已点赞）',
+      unavailable: data.textOnly ? '已复制原文、译文和出处链接；未找到可用的点赞按钮（未触发媒体下载）' : '已复制贴文和出处链接；未找到可用的点赞按钮',
+      unconfirmed: data.textOnly ? '已复制原文、译文和出处链接；未能确认点赞，请检查页面（未触发媒体下载）' : '已复制贴文和出处链接；未能确认点赞，请检查页面'
     }[status];
     toast(message + (imageCount ? (merging ? '（含 1 张合成图）' : `（含 ${imageCount} 张原图）`) : ''), status === "unavailable" || status === "unconfirmed");
     await reportDownloads(message);
   }
-  async function handleCopy(article, button, originalOnly = false, mergePhotos = false) {
+  async function handleCopy(article, button, textOnly = false, mergePhotos = false, includeTranslation = true) {
     if (copying || button.disabled) { toast("正在复制，请稍候"); return; }
     gifClipboardToken++;
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
-    button.setAttribute("aria-label", "正在读取并复制贴文");
+    button.setAttribute("aria-label", textOnly ? "正在读取并复制原文和译文" : "正在读取并复制贴文");
     let imageRead;
     try {
       await runCopy(async () => {
@@ -444,23 +471,23 @@
         const postUrl = extractor.postUrl(article);
         if (!postUrl) throw new Error('未读取到帖子链接，请在原帖上重试');
         const getArticle = () => findPost(postUrl) || article;
-        const originalPhotos = getMedia(article, postUrl).filter(item => item.type === 'photo');
-        imageRead = startImageRead(originalPhotos, postUrl, epoch);
-        const texts = await extractor.captureTexts(article, { cachedOriginal: originals.get(postUrl), getArticle, includeTranslation: !originalOnly });
+        const originalPhotos = textOnly ? [] : getMedia(article, postUrl).filter(item => item.type === 'photo');
+        if (!textOnly) imageRead = startImageRead(originalPhotos, postUrl, epoch);
+        const texts = await extractor.captureTexts(article, { cachedOriginal: originals.get(postUrl), getArticle, includeTranslation });
         assertPage(epoch);
         if (texts.original && postUrl) originals.set(postUrl, texts.original);
         // Never use a recycled article's media for the previous post.
         if (extractor.postUrl(getArticle()) !== postUrl) throw new Error('帖子已离开页面，请在原帖上重试');
-        const currentMedia = getMedia(getArticle(), postUrl);
-        const samePhotos = currentMedia.filter(item => item.type === 'photo').map(item => item.url).join('\n') === originalPhotos.map(item => item.url).join('\n');
+        const currentMedia = textOnly ? [] : getMedia(getArticle(), postUrl);
+        const samePhotos = !textOnly && currentMedia.filter(item => item.type === 'photo').map(item => item.url).join('\n') === originalPhotos.map(item => item.url).join('\n');
         if (!samePhotos) discardImageRead(imageRead);
-        const data = { ...texts, postUrl, media: currentMedia, imageRead: samePhotos ? imageRead : null, mergePhotos };
+        const data = { ...texts, postUrl, media: currentMedia, imageRead: samePhotos ? imageRead : null, mergePhotos: textOnly ? false : mergePhotos, textOnly };
         await copyAndLike(data, postUrl, epoch);
       });
     } catch (error) {
       showError(error);
     }
-    finally { discardImageRead(imageRead); button.disabled = false; button.removeAttribute("aria-busy"); button.setAttribute("aria-label", "复制贴文和出处链接，并自动点赞"); }
+    finally { discardImageRead(imageRead); button.disabled = false; button.removeAttribute("aria-busy"); button.setAttribute("aria-label", "复制按钮：点击复制图文，Alt+点击只复制文案，Shift+点击合图"); }
   }
   function convertible(item) { return item.type === 'video' || item.type === 'animated_gif'; }
   async function handleGif(article, button, sourceMode = false) {
@@ -479,13 +506,16 @@
         assertPage(epoch);
         const postUrl = extractor.postUrl(article);
         if (!postUrl) throw new Error('未读取到帖子链接，请在原帖上重试');
+        const postId = postUrl.match(/\/status\/(\d+)/)?.[1];
         if (!getMedia(article, postUrl).some(convertible)) throw new Error('当前帖子没有可转换的视频或动图');
         const getArticle = () => findPost(postUrl) || article;
         const texts = await extractor.captureTexts(article, { cachedOriginal: originals.get(postUrl), getArticle, includeTranslation: true });
         assertPage(epoch);
         if (extractor.postUrl(getArticle()) !== postUrl) throw new Error('帖子已离开页面，请在原帖上重试');
         if (texts.original) originals.set(postUrl, texts.original);
-        let media = getMedia(getArticle(), postUrl).filter(convertible);
+        const allMedia = getMedia(getArticle(), postUrl).map((item, index) => ({ ...item, mediaIndex: index }));
+        let media = allMedia.filter(convertible);
+        const photos = allMedia.filter(item => item.type === 'photo');
         if (!media.length) throw new Error('当前帖子没有可转换的视频或动图');
         await clipboard.writeText({ ...texts, postUrl, reserveGifLine: true });
         assertPage(epoch);
@@ -495,7 +525,7 @@
         // the page is hidden while resolving its original MP4 address.
         const downloadPromise = (async () => {
           if (media.some(item => !item.url)) media = await send({ type: 'resolveMedia', media });
-          return send({ type: 'downloadMedia', format: 'gif', gifMode, postId: postUrl.match(/\/status\/(\d+)/)?.[1], media });
+          return send({ type: 'downloadMedia', format: 'gif', gifMode, postId, media });
         })();
         // Copying succeeded: do not delay the like until media resolution ends.
         // Observe early download failures while the liked state is being confirmed.
@@ -510,7 +540,7 @@
         const message = `已复制贴文、译文和出处链接（${likeText}）`;
         try {
           const jobs = await downloadPromise;
-          pendingGif = { jobs, texts, postUrl, token, epoch };
+          pendingGif = { jobs, texts, postUrl, postId, photos, token, epoch };
           const failed = jobs.filter(job => job.status === 'failed');
           toast(`${message}；${failed.length ? failed.map(job => job.error).join('；') : `正在制作 ${jobs.length} 个${gifLabel}，完成后会自动加入剪贴板`}`, failed.length > 0 || ['unavailable', 'unconfirmed'].includes(status));
         } catch (error) {
@@ -523,7 +553,7 @@
       else showError(error);
     }
     finally {
-      if (pendingGif && pendingGif.jobs.length && pendingGif.jobs.every(job => job.id)) void watchGifClipboard(pendingGif.jobs, pendingGif.texts, pendingGif.postUrl, pendingGif.token, pendingGif.epoch);
+      if (pendingGif && pendingGif.jobs.length && pendingGif.jobs.every(job => job.id)) void watchGifClipboard(pendingGif);
       button.disabled = false; button.removeAttribute('aria-busy');
     }
   }
@@ -580,8 +610,8 @@
       button.type = "button";
       button.dataset.xCopyUi = "true";
       button.className = "x-copy-post-button";
-      button.setAttribute("aria-label", "复制贴文和出处链接，并自动点赞");
-      button.title = "复制按钮";
+      button.setAttribute("aria-label", "复制按钮：点击复制图文并自动点赞；Alt+点击只复制原文、译文和出处，不下载媒体；Shift+点击合图");
+      button.title = "点击：复制原文、译文、图片和出处；Alt+点击：只复制原文、译文和出处，不复制图片、不触发 GIF/MP4 下载；Shift+点击：合图";
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("viewBox", "0 0 24 24");
       svg.setAttribute("aria-hidden", "true");
@@ -592,7 +622,7 @@
       button.addEventListener('pointerenter', () => warmImages(article));
       button.addEventListener('focus', () => warmImages(article));
       button.addEventListener("click", event => {
-        event.preventDefault(); event.stopPropagation(); handleCopy(article, button, event.altKey, event.shiftKey);
+        event.preventDefault(); event.stopPropagation(); handleCopy(article, button, event.altKey && !event.shiftKey, event.shiftKey, !(event.altKey && event.shiftKey));
       });
       group.append(button);
     }

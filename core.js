@@ -72,7 +72,7 @@
     try {
       const url = new URL(raw);
       if (url.protocol !== 'file:' || url.hostname || url.search || url.hash ||
-          !/\.(?:png|jpe?g|webp)$/i.test(url.pathname)) return '';
+          !/\.(?:png|jpe?g|webp|gif)$/i.test(url.pathname)) return '';
       return url.href;
     } catch { return ''; }
   }
@@ -110,7 +110,7 @@
     for (const item of images) {
       const local = item?.fileUrl ? fileImageUrl(item.fileUrl) : localSource;
       if (item?.fileUrl && !local) throw new Error('图片的本地文件引用无效');
-      if (/^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/.test(item.dataUrl || '')) {
+      if (local || /^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/.test(item.dataUrl || '')) {
         imageHtml += `<img src="${escapeHtml(local || item.dataUrl)}" alt="" style="max-width:100%;height:auto;vertical-align:bottom">`;
       }
     }

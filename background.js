@@ -317,7 +317,11 @@ if (typeof importScripts === 'function') importScripts('media.js');
     });
     async function resolveMedia(list, tabId) {
       if (!Array.isArray(list) || list.length > media.MAX_MEDIA) throw new Error('媒体列表无效');
-      const items = list.map(media.normalizeMedia).filter(Boolean);
+      const items = list.map((source, index) => {
+        const item = media.normalizeMedia(source);
+        if (!item) return null;
+        return { ...item, mediaIndex: Number.isInteger(source?.mediaIndex) && source.mediaIndex >= 0 && source.mediaIndex <= 999 ? source.mediaIndex : index };
+      }).filter(Boolean);
       if (items.every(item => item.type === 'photo' || item.url)) return items;
       let captured = [];
       for (const id of CAT_IDS) {
@@ -329,7 +333,10 @@ if (typeof importScripts === 'function') importScripts('media.js');
         finally { clearTimeout(timer); }
       }
       const matched = media.matchCaptured(items, captured);
-      return items.map(item => matched.find(match => match.type === item.type && (match.id || match.poster) === (item.id || item.poster)) || item);
+      return items.map(item => {
+        const match = matched.find(candidate => candidate.type === item.type && (candidate.id || candidate.poster) === (item.id || item.poster));
+        return match ? { ...match, mediaIndex: item.mediaIndex } : item;
+      });
     }
     function schedule(job) {
       const generation = job.generation || 0;
@@ -515,6 +522,11 @@ if (typeof importScripts === 'function') importScripts('media.js');
         if (!Array.isArray(message.urls) || !message.urls.length || message.urls.length > media.MAX_MEDIA) throw new Error('图片列表无效');
         if (await cleanClipboardBatches(2)) throw new Error('原图副本缓存清理失败，请检查下载目录权限后重试');
         if (clipboardBatches.length >= 3) throw new Error('原图副本缓存清理失败，请检查下载目录权限后重试');
+        const mediaIndexes = message.mediaIndexes;
+        if (message.postId !== undefined && !/^\d{1,30}$/.test(String(message.postId))) throw new Error('图片编号无效');
+        if (mediaIndexes !== undefined && (!Array.isArray(mediaIndexes) || mediaIndexes.length !== message.urls.length ||
+            mediaIndexes.some(value => !Number.isInteger(value) || value < 0 || value > 999))) throw new Error('图片编号无效');
+        const prefix = message.postId === undefined ? batchId : String(message.postId);
         // Read and save one original at a time. The 24 MiB worker limit is per
         // read batch, so a 20-photo post whose originals total more than that
         // can still be staged without ever assembling the whole batch in RAM.
@@ -534,7 +546,8 @@ if (typeof importScripts === 'function') importScripts('media.js');
               if (!image?.dataUrl) throw new Error('原图没有全部读取成功，无法保存本地副本');
               const dataUrl = String(image.dataUrl);
               const extension = dataUrl.startsWith('data:image/png') ? 'png' : dataUrl.startsWith('data:image/webp') ? 'webp' : 'jpg';
-              const leaf = `${batchId}_${index + 1}.${extension}`;
+              const ordinal = mediaIndexes ? mediaIndexes[index] + 1 : index + 1;
+              const leaf = `${prefix}_${ordinal}.${extension}`;
               const id = await api.downloads.download({ url: dataUrl, filename: `X/clipboard/${leaf}`, conflictAction: 'uniquify', saveAs: false });
               files.push({ id, leaf, index });
             } catch (error) { failure ||= error; }
@@ -628,16 +641,20 @@ if (typeof importScripts === 'function') importScripts('media.js');
         if (!/^\d{1,30}$/.test(message.postId) || !Array.isArray(message.media) || message.media.length > media.MAX_MEDIA) throw new Error('帖子或媒体列表无效');
         if (message.format !== undefined && !['gif', 'mp4'].includes(message.format)) throw new Error('下载格式无效');
         if (message.gifMode !== undefined && !['slim', 'source'].includes(message.gifMode)) throw new Error('GIF 模式无效');
-        const selected = message.media.map(media.normalizeMedia).filter(item => item && item.type !== 'photo');
+        const selected = message.media.map((source, index) => {
+          const item = media.normalizeMedia(source);
+          if (!item) return null;
+          return { ...item, mediaIndex: Number.isInteger(source?.mediaIndex) && source.mediaIndex >= 0 && source.mediaIndex <= 999 ? source.mediaIndex : index };
+        }).filter(item => item && item.type !== 'photo');
         const added = [];
-        for (const [index, item] of selected.entries()) {
+        for (const item of selected) {
           const format = message.format || formatFor(item);
           const gifMode = gifModeFor(message);
           const existing = jobs.find(job => job.postId === message.postId && job.tabId === sender.tab.id && job.type === item.type && job.url === item.url && formatFor(job) === format && (format !== 'gif' || gifModeFor(job) === gifMode) && ACTIVE.has(job.status));
           if (existing) { added.push({ ...existing }); continue; }
           jobs = jobs.filter(job => ACTIVE.has(job.status) || jobs.indexOf(job) >= jobs.length - 60);
           if (jobs.length >= 100) throw new Error('下载任务过多，请等待现有任务结束');
-          const job = { id: crypto.randomUUID(), postId: message.postId, tabId: sender.tab.id, type: item.type, format, url: item.url, index,
+          const job = { id: crypto.randomUUID(), postId: message.postId, tabId: sender.tab.id, type: item.type, format, url: item.url, index: item.mediaIndex,
             ...(format === 'gif' ? { gifMode } : {}),
             status: item.url ? 'queued' : 'failed', error: item.url ? '' : '尚未取得该帖完整 MP4；请播放媒体后重试，或使用猫抓处理 HLS', createdAt: Date.now() };
           jobs.push(job); added.push({ ...job });
