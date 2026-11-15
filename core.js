@@ -86,7 +86,7 @@
     } catch { return ''; }
   }
 
-  function buildClipboardPayload({ original, translation, postUrl, images = [], gifFileUrls = [], reserveGifLine = false, mergedImage = null, mergedImageFileUrl = '' }) {
+  function buildClipboardPayload({ original, translation, postUrl, images = [], gifFileUrls = [], mergedImage = null, mergedImageFileUrl = '' }) {
     original = stripHashtags(original);
     translation = stripHashtags(translation);
     postUrl = canonicalPostUrl(postUrl);
@@ -94,7 +94,7 @@
     if (original) sections.push(original);
     if (translation) sections.push(translation);
     const text = sections.join("\n\n");
-    const plain = [text, postUrl].filter(Boolean).join(reserveGifLine ? '\n\n' : '\n');
+    const plain = [text, postUrl].filter(Boolean).join('\n');
 
     const htmlSections = [];
     if (original) htmlSections.push(htmlText(original));
@@ -124,7 +124,7 @@
     const body = htmlSections.join('<br><br>');
     const link = postUrl ? `<a href="${escapeHtml(postUrl)}">${escapeHtml(postUrl)}</a>` : '';
     const content = [body, imageHtml, gifHtml].filter(Boolean).join('<br>');
-    return { plain, html: `<div>${[content, link].filter(Boolean).join(reserveGifLine ? '<br><br>' : '<br>')}</div>` };
+    return { plain, html: `<div>${[content, link].filter(Boolean).join('<br>')}</div>` };
   }
 
   // A profile media batch: author block, bio, its translation, the profile

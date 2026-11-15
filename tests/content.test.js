@@ -65,8 +65,8 @@ test('GIF button copies text, likes the post and downloads one slim GIF', async 
     assert.equal(requests[0].media.length, 1);
     assert.equal(requests[0].media[0].type, 'video');
     assert.equal(setup.writes.length, 1); assert.equal(setup.likes.length, 1);
-    assert.equal(setup.writes[0].plain, 'Original\n\n译文\n\nhttps://x.com/a/status/1');
-    assert.match(setup.writes[0].html, /译文<br><br><a /);
+    assert.equal(setup.writes[0].plain, 'Original\n\n译文\nhttps://x.com/a/status/1');
+    assert.match(setup.writes[0].html, /译文<br><a /);
     assert.doesNotMatch(setup.writes[0].html, /<img/);
     assert.equal(button.disabled, false);
     // Alt selects the source recipe, preserving translation and the existing like.
@@ -102,7 +102,7 @@ test('GIF clipboard upgrades to the local GIF file after conversion completes', 
     assert.equal(setup.writes.length, 2);
     assert.doesNotMatch(setup.writes[0].html, /<img/);
     assert.match(setup.writes[1].html, /<img[^>]+file:\/\/\/C:\/Downloads\/X\/1\.gif/);
-    assert.equal(setup.writes[1].plain, 'Original\n\n译文\n\nhttps://x.com/a/status/1');
+    assert.equal(setup.writes[1].plain, 'Original\n\n译文\nhttps://x.com/a/status/1');
     assert.match(setup.document.querySelector('.x-copy-toast').textContent, /GIF 已就绪/);
   } finally { setup.dom.window.close(); }
 });
@@ -153,6 +153,7 @@ test('GIF mode also stages static photos and keeps media order with numbering', 
     const html = setup.writes[1].html;
     assert.equal((html.match(/<img/g) || []).length, 2);
     assert.ok(html.indexOf('1_1.jpg') < html.indexOf('1_2.gif'));
+    assert.doesNotMatch(html, /<br><br>/);
     assert.match(setup.document.querySelector('.x-copy-toast').textContent, /含 1 张静态图/);
     assert.ok(calls.some(request => request.type === 'confirmClipboardImages' && request.batchId === 'photo-batch'));
   } finally { setup.dom.window.close(); }
@@ -260,7 +261,7 @@ test('GIF and copy buttons serialize clipboard writes while a GIF copy is pendin
     assert.equal(setup.writes.length, 0); assert.equal(calls.length, 0); assert.equal(setup.likes.length, 0);
     finish(); await tick(20);
     assert.equal(setup.writes.length, 1); assert.equal(calls.filter(call => call.type === 'downloadMedia').length, 1);
-    assert.equal(setup.writes[0].plain, 'Source\n\nhttps://x.com/a/status/1');
+    assert.equal(setup.writes[0].plain, 'Source\nhttps://x.com/a/status/1');
   } finally { setup.dom.window.close(); }
 });
 

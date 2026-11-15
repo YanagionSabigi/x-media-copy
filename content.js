@@ -369,7 +369,7 @@
       const written = await runCopy(async () => {
         if (invalidated || token !== gifClipboardToken || epoch !== imageEpoch) return false;
         assertContext();
-        await clipboard.writeText({ ...texts, postUrl, reserveGifLine: true, images });
+        await clipboard.writeText({ ...texts, postUrl, images });
         return true;
       });
       if (written) {
@@ -517,7 +517,7 @@
         let media = allMedia.filter(convertible);
         const photos = allMedia.filter(item => item.type === 'photo');
         if (!media.length) throw new Error('当前帖子没有可转换的视频或动图');
-        await clipboard.writeText({ ...texts, postUrl, reserveGifLine: true });
+        await clipboard.writeText({ ...texts, postUrl });
         assertPage(epoch);
         copied = true;
         toast('已复制文字；GIF 完成后会自动加入剪贴板，请等待「GIF 已就绪」提示');

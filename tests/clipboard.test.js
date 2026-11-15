@@ -16,18 +16,6 @@ test('local-file merged copy writes mixed HTML and text without a competing nati
   assert.equal(await written[0].formats['text/plain'].text(),'Text\nhttps://x.com/a/status/1');
 });
 
-test('GIF text copy writes the insertion line in plain and HTML clipboard records', async () => {
-  let written;
-  class ClipboardItem { constructor(formats) { this.formats = formats; } }
-  const sandbox = vm.createContext({ Blob, ClipboardItem, XCopyCore: require('../core.js'), navigator: { clipboard: { write: async items => { written = items; } } } });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../clipboard.js'), 'utf8'), sandbox);
-  await sandbox.XCopyClipboard.writeText({ original: 'Original', translation: '译文', postUrl: 'https://x.com/a/status/1?s=20', reserveGifLine: true });
-  assert.equal(written.length, 1);
-  assert.deepEqual(Object.keys(written[0].formats), ['text/plain', 'text/html']);
-  assert.equal(await written[0].formats['text/plain'].text(), 'Original\n\n译文\n\nhttps://x.com/a/status/1');
-  assert.equal(await written[0].formats['text/html'].text(), '<div>Original<br><br>译文<br><br><a href="https://x.com/a/status/1">https://x.com/a/status/1</a></div>');
-});
-
 test("writes just one text record with filtered source, translation and clean link", async () => {
   const writes = [];
   class ClipboardItem { constructor(formats) { this.formats = formats; } }
@@ -190,15 +178,17 @@ test('oversized profile batches also use local files and confirm the staged batc
   assert.ok(sent.some(message => message.type === 'confirmClipboardImages' && message.batchId === 'profile-batch'));
 });
 
-test('GIF file reference is written into the mixed clipboard with the reserved line', async () => {
+test('GIF file reference is written into the mixed clipboard without an extra blank line', async () => {
   let written;
   class ClipboardItem { constructor(formats) { this.formats = formats; } }
   const sandbox = vm.createContext({ Blob, ClipboardItem, XCopyCore: require('../core.js'), navigator: { clipboard: { write: async items => { written = items; } } } });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../clipboard.js'), 'utf8'), sandbox);
-  await sandbox.XCopyClipboard.writeText({ original: 'cat wave', postUrl: 'https://x.com/a/status/1', reserveGifLine: true, gifFileUrls: ['file:///C:/Downloads/X/1.gif'] });
+  await sandbox.XCopyClipboard.writeText({ original: 'cat wave', postUrl: 'https://x.com/a/status/1', gifFileUrls: ['file:///C:/Downloads/X/1.gif'] });
   const html = await written[0].formats['text/html'].text();
   assert.match(html, /<img[^>]+file:\/\/\/C:\/Downloads\/X\/1\.gif/);
-  assert.equal(await written[0].formats['text/plain'].text(), 'cat wave\n\nhttps://x.com/a/status/1');
+  assert.match(html, /1\.gif[^>]*><br><a href/);
+  assert.doesNotMatch(html, /<br><br>/);
+  assert.equal(await written[0].formats['text/plain'].text(), 'cat wave\nhttps://x.com/a/status/1');
 });
 
 test('profile copy writes the author block and images as mixed HTML and text', async () => {

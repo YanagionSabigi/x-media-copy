@@ -2,13 +2,13 @@
 
 Chrome 扩展，在 X 推文底部添加复制与 GIF 按钮。把原文、页面译文、原图和出处一起复制到聊天窗口或文档，也可以下载 MP4，或把视频和动图制作成 GIF。
 
-当前版本 **1.5.1**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
+当前版本 **1.5.2**：[下载安装包](https://github.com/YanagionSabigi/x-media-copy/releases/latest) · [使用细节](USAGE.md) · [更新记录](CHANGELOG.md)
 
 ## 安装
 
 需要 Chrome 116 或以上版本，以及能正常访问 X 的网络环境。
 
-1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.5.1.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
+1. 从 [Releases](https://github.com/YanagionSabigi/x-media-copy/releases/latest) 下载 `x-media-copy-1.5.2.zip`，解压到准备长期保留的文件夹。安装插件只需这个 ZIP；`upstream-sources` 归档供源码分发与构建使用。
 2. 在 Chrome 地址栏输入 `chrome://extensions`，打开右上角的「开发者模式」。
 3. 点击「加载已解压的扩展程序」，选择直接包含 `manifest.json` 的文件夹。
 4. 打开或刷新 `https://x.com/`、`https://twitter.com/` 页面。
@@ -45,13 +45,12 @@ X 推文底部最右侧的复制按钮支持以下操作：
 
 GIF 无音频、循环播放，保留视频时长，但受格式时间精度限制。按钮不同时下载 MP4，但会复制静态附件。普通视频需要原始 MP4 时，点击复制按钮；Alt+GIF 只是源帧率/原尺寸的 GIF，体积通常更大、转换更慢。
 
-复制内容在译文与出处之间保留一个空白行；GIF 完成后，HTML 会把本地 GIF 放在这个位置：
+复制内容在译文与出处之间只保留一个换行；GIF 完成后，HTML 会把本地媒体直接放在出处链接之前：
 
 ```text
 Original text
 
 中文译文
-
 https://x.com/example/status/1234567890
 ```
 
